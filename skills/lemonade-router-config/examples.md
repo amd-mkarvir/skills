@@ -5,7 +5,11 @@ should produce. Note what was defaulted: names, ids, thresholds, `on_error`,
 `default_label`, and `model_name` all come from the defaults table in
 `SKILL.md` when the user doesn't specify them — including `model_name`, which
 is derived from the default candidate rather than a fixed literal, so the
-four examples below each get a distinct name.
+examples below each get a distinct name.
+
+Examples 1–4 illustrate mechanics. Examples 5–7 are production-grade configs
+from a real enterprise deployment — use them as templates when the user's
+domain resembles HR, Benefits, or Finance.
 
 ## 1. Pure intent, no concrete signals → LLM-as-router
 
@@ -232,3 +236,247 @@ relying on `"PII"`/`"Jailbreak"`), and classifier leaves without an explicit
 Tell the user: the metadata rule is honored by the server but is not yet
 editable in the desktop Hybrid Router editor (it will warn about a lossy edit
 if they open this policy there).
+
+---
+
+## 5. HR chatbot — LLM-as-router with a privacy-first prompt
+
+> Build an HR assistant router. Any request with PII — names with salaries,
+> SSNs, bank accounts, equity details, dates of birth — must stay on the local
+> model. Everything else can go to the cloud model. When in doubt, keep it
+> local.
+
+"PII" is a meaning judgment, not a regex — the boundary is fuzzy and context-
+dependent (a name alone is fine; a name + salary is not). That ambiguity is
+exactly what Mode A is designed for: a small LLM reads each request and
+decides. The router model doubles as `default_model` so a router hiccup never
+leaks to the cloud.
+
+The prompt describes *when* to pick each candidate. It does **not** tell the
+model how to format its reply — the engine appends its own `{"model": ...,
+"rationale": ...}` contract.
+
+```json
+{
+  "version": "1",
+  "model_name": "user.HR-Admin-Router",
+  "recipe": "collection.router",
+  "components": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
+  "routing": {
+    "candidates": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
+    "default_model": "Qwen3.5-9B-NoThinking",
+    "router": {
+      "type": "llm",
+      "model": "Qwen3.5-9B-NoThinking",
+      "prompt": "You are a routing assistant for an AI company. Your job is to choose which model should handle each request.\n\nUse Qwen3.5-9B-NoThinking (local, private) when:\n- The request contains personally identifiable information (PII), such as names with salaries, Social Security numbers (SSNs), bank account numbers, email addresses, compensation data, equity details, or dates of birth.\n- Data privacy is paramount — anything that should never leave the local machine.\n\nUse fireworks.kimi-k2p6 (cloud, powerful) for all other requests.\n\nIf the request is ambiguous, default to Qwen3.5-9B-NoThinking. When in doubt, prioritize privacy over capability."
+    }
+  }
+}
+```
+
+**When to prefer Mode A over regex for PII**: a regex catches `123-45-6789`
+but misses "Alice's salary is sixty thousand". If the domain has natural-
+language PII, Mode A catches it; if the domain has structured PII (form
+inputs, database exports), regex is more reliable and cheaper (no extra LLM
+call per request). Use both together when both forms appear — put regex rules
+first (cheaper, no latency), then fall through to an LLM router or classifier
+for the fuzzy residual.
+
+---
+
+## 6. Benefits chatbot — three-tier routing with max_chars and rich outputs
+
+> Route a benefits chatbot. Any request containing PII (email, salary, SSN,
+> equity, compensation, bank account, date of birth) must stay local on
+> `Qwen3.5-9B-NoThinking`. Complex analysis (comparison, benchmarking,
+> optimization, or anything longer than 800 characters) goes to
+> `fireworks.kimi-k2p6`. Short, simple benefit lookups (401k, PTO, healthcare,
+> open enrollment, etc. under 400 characters) also stay local. Default to
+> cloud for anything else.
+
+Three tiers: **PII fence** first (privacy-critical, `on_error: match_true`
+would be appropriate but this config uses the default fail-open for
+simplicity), **complexity escalation** second, **domain fast-path** third.
+`outputs` carries two fields (`reason` + `data_class`/`tier`) — useful for
+downstream logging and observability.
+
+New patterns not shown in examples 1–4:
+- `max_chars` to cap a rule to *short* prompts only
+- An `all` combining `max_chars` + `keywords_any` (domain keyword on a short
+  prompt = cheap local RAG; same keyword on a long prompt falls through to
+  cloud)
+- Multiple key/value pairs in `outputs` for structured tagging
+
+```json
+{
+  "version": "1",
+  "model_name": "user.Benefits-Router",
+  "recipe": "collection.router",
+  "components": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
+  "routing": {
+    "candidates": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
+    "default_model": "fireworks.kimi-k2p6",
+    "rules": [
+      {
+        "id": "pii-stays-local",
+        "match": {
+          "any": [
+            { "regex": "[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}" },
+            { "regex": "\\$[0-9,]+(K|k|M|m)?\\b" },
+            { "regex": "\\b[0-9]{3}-[0-9]{2}-[0-9]{4}\\b" },
+            { "keywords_any": ["salary", "equity", "ssn", "social security", "bank account", "date of birth", "compensation"] }
+          ]
+        },
+        "route_to": "Qwen3.5-9B-NoThinking",
+        "outputs": { "reason": "pii-detected", "data_class": "sensitive" }
+      },
+      {
+        "id": "complex-benefits-analysis",
+        "match": {
+          "any": [
+            { "keywords_any": ["compare", "benchmark", "analyze", "optimize", "recommend", "industry standard", "strategy"] },
+            { "min_chars": 800 }
+          ]
+        },
+        "route_to": "fireworks.kimi-k2p6",
+        "outputs": { "reason": "complex-benefits-analysis", "tier": "cloud" }
+      },
+      {
+        "id": "simple-benefits-rag",
+        "match": {
+          "all": [
+            { "max_chars": 400 },
+            { "keywords_any": ["401k", "401(k)", "vesting", "parental leave", "PTO", "vacation", "healthcare", "dental", "vision", "FSA", "HSA", "COBRA", "open enrollment", "qualifying life event", "copay", "deductible", "premium", "handbook", "policy", "onboard"] }
+          ]
+        },
+        "route_to": "Qwen3.5-9B-NoThinking",
+        "outputs": { "reason": "simple-benefits-rag", "tier": "local-fast" }
+      }
+    ]
+  }
+}
+```
+
+**Rule ordering matters here**: `pii-stays-local` fires first. A message like
+"what's the copay on my plan — my salary is $95K" would match both rule 1
+(salary keyword) and rule 3 (copay + short). Because rule 1 comes first, it
+routes local — correct. Reordering would leak PII to the cloud.
+
+---
+
+## 7. Finance chatbot — semantic similarity + LLM classifier in tandem
+
+> Build a finance assistant router for a startup. PII-flavored finance queries
+> (individual salaries, equity by person, payroll details) stay on the local
+> model. Deep modeling requests (Monte Carlo, cap table, cohort forecasting,
+> sensitivity analysis) go to the cloud. Simple metric lookups (burn rate, MRR,
+> runway, ARR) stay local. As a fallback, use a local LLM to judge whether a
+> request is COMPLEX or SIMPLE, routing COMPLEX to cloud. Default to local.
+
+The most advanced pattern: **two classifiers working in tandem** — a fast
+embedding classifier (`semantic_similarity`) fires first to catch known
+patterns, then an LLM classifier acts as a catch-all judge for requests that
+didn't match any semantic bucket. Four rules, two classifier types, three
+score thresholds tuned independently per rule.
+
+What's unique here not shown elsewhere:
+- Two classifiers declared; rules reference each independently
+- `semantic_similarity` with three distinct concept buckets (not just two)
+- An `llm` classifier used as a safety net *after* semantic matching, not as
+  the primary signal — keeps latency low for the common case
+- Per-rule score thresholds tuned to the domain (0.65 for PII, 0.72 for deep
+  modeling, 0.60 for simple lookups) rather than the default 0.5
+- `outputs` carries a `classifier` field to tell downstream code *which*
+  classifier fired
+
+```json
+{
+  "version": "1",
+  "model_name": "user.Finance-Router",
+  "recipe": "collection.router",
+  "components": [
+    "fireworks.kimi-k2p6",
+    "Qwen3.5-9B-NoThinking",
+    "embeddinggemma-300m-qat-q8_0-GGUF-Q8_0"
+  ],
+  "routing": {
+    "candidates": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
+    "default_model": "Qwen3.5-9B-NoThinking",
+    "classifiers": [
+      {
+        "id": "finance-topic",
+        "type": "semantic_similarity",
+        "model": "embeddinggemma-300m-qat-q8_0-GGUF-Q8_0",
+        "reference_phrases": {
+          "pii-finance": [
+            "show me the salary breakdown by employee",
+            "what is the equity package for this specific person",
+            "list all compensation by individual",
+            "employee bank account for payroll",
+            "individual 401k contribution amounts",
+            "personal compensation details for staff member"
+          ],
+          "simple-lookup": [
+            "what is our current burn rate",
+            "what is the MRR this month",
+            "how much runway do we have left",
+            "what is the current ARR",
+            "what is today's headcount",
+            "how much did we spend last quarter"
+          ],
+          "deep-modeling": [
+            "run a Monte Carlo simulation on our runway",
+            "model the cap table after the next funding round",
+            "forecast revenue using cohort analysis",
+            "calculate waterfall distribution for an exit scenario",
+            "build a sensitivity analysis for burn rate assumptions",
+            "recommend an intervention strategy for high churn and retention",
+            "analyze cap table dilution under different term sheet scenarios"
+          ]
+        }
+      },
+      {
+        "id": "complexity",
+        "type": "llm",
+        "model": "Qwen3.5-9B-NoThinking",
+        "prompt": "You are a financial complexity classifier. Assess whether this finance request requires deep multi-step modeling and cloud-level reasoning, or is a simple metric lookup that a local model can handle.\n\nClassify as COMPLEX if the request involves: statistical modeling, simulations, multi-variable forecasting, cohort analysis, cap table calculations, or synthesizing multiple data sources.\n\nClassify as SIMPLE if the request is a direct data lookup, a single metric question, or a short factual query.\n\nReply with exactly one label: COMPLEX or SIMPLE.",
+        "labels": ["COMPLEX", "SIMPLE"],
+        "default_label": "SIMPLE",
+        "on_error": "match_false"
+      }
+    ],
+    "rules": [
+      {
+        "id": "pii-finance-semantic",
+        "match": { "classifier": "finance-topic", "label": "pii-finance", "min_score": 0.65 },
+        "route_to": "Qwen3.5-9B-NoThinking",
+        "outputs": { "reason": "pii-semantic-finance", "data_class": "sensitive", "classifier": "semantic_similarity" }
+      },
+      {
+        "id": "deep-model-semantic",
+        "match": { "classifier": "finance-topic", "label": "deep-modeling", "min_score": 0.72 },
+        "route_to": "fireworks.kimi-k2p6",
+        "outputs": { "reason": "deep-finance-model-semantic", "tier": "cloud", "classifier": "semantic_similarity" }
+      },
+      {
+        "id": "deep-model-llm-judge",
+        "match": { "classifier": "complexity", "label": "COMPLEX", "min_score": 0.5 },
+        "route_to": "fireworks.kimi-k2p6",
+        "outputs": { "reason": "llm-judged-complex-finance", "tier": "cloud", "classifier": "llm" }
+      },
+      {
+        "id": "simple-metric-lookup",
+        "match": { "classifier": "finance-topic", "label": "simple-lookup", "min_score": 0.60 },
+        "route_to": "Qwen3.5-9B-NoThinking",
+        "outputs": { "reason": "simple-metric-lookup", "tier": "local-fast", "classifier": "semantic_similarity" }
+      }
+    ]
+  }
+}
+```
+
+**Tuning guidance for `reference_phrases`**: aim for 5–8 varied phrases per
+concept covering different vocabulary, register, and specificity. Phrases that
+are too similar to each other (all formal, all the same length) produce a
+tight cluster that fails on paraphrases. Include at least one informal and one
+technical phrasing per concept.
