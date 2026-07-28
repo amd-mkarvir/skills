@@ -3,7 +3,7 @@ name: lemonade-router-config
 description: >-
   Turns a natural-language description of routing intent into a valid Lemonade
   `collection.router` policy JSON. The skill generates and validates the JSON
-  only — it does not register it or call the live server.
+  only - it does not register it or call the live server.
   Use when the user wants to route requests between models ("route sensitive
   queries to X and everything else to Y"), generate a router/hybrid-router
   config or policy, author a collection.router JSON, split traffic between a
@@ -17,7 +17,7 @@ description: >-
 
 Generate a **`collection.router` policy JSON** from a plain-English description
 of how requests should be routed. The skill produces and validates the JSON
-only — it does not call the live server, register the policy, or run requests
+only - it does not call the live server, register the policy, or run requests
 through it. The JSON is accepted by the strict server-side parser on the first
 try and stays editable in the desktop app's Hybrid Router editor.
 
@@ -30,12 +30,12 @@ exist, and choosing the right one is the first decision:
 | **Rules** | `routing.rules` (+ optional `routing.classifiers`) | The user names any concrete signal: keywords, regex, length, tools, images, metadata, PII/topic classifiers, thresholds, "first match", fallback logic. Deterministic, no extra LLM call for simple conditions. |
 
 `routing.router` is **mutually exclusive** with `routing.rules` and
-`routing.classifiers` — never emit both.
+`routing.classifiers` - never emit both.
 
-## Step 1 — Extract from the user's words
+## Step 1 - Extract from the user's words
 
 - **Candidates**: the models that may *answer* requests. Verbatim model names
-  (e.g. `Gemma-3-4b-it-GGUF`). If the user names none, ask — never invent
+  (e.g. `Gemma-3-4b-it-GGUF`). If the user names none, ask - never invent
   model names. `lemonade list` or `GET /api/v1/models` shows what's available.
 - **Default / fallback**: which candidate gets everything that matches nothing.
   If unstated, use the model the user framed as "local", "small", or "safe";
@@ -45,7 +45,7 @@ exist, and choosing the right one is the first decision:
 - **Classifier models**: models named for *detection* rather than answering
   (BERT-style encoders, embedding models, an LLM used as judge).
 
-## Step 2 — Scaffold
+## Step 2 - Scaffold
 
 Always exactly this envelope (the parser rejects unknown or missing keys):
 
@@ -62,14 +62,14 @@ Always exactly this envelope (the parser rejects unknown or missing keys):
 - `version` is the literal string `"1"`.
 - `model_name` must start with `user.`; slug from the user's description if
   they gave a name (`user.<Name>` using only `[A-Za-z0-9._-]`). If they didn't
-  name it, derive one from context instead of a fixed literal — e.g.
-  `user.<slug-of-default-candidate>-Router` — so two different policies don't
+  name it, derive one from context instead of a fixed literal - e.g.
+  `user.<slug-of-default-candidate>-Router` - so two different policies don't
   collide by default. **`/pull` is idempotent per `model_name`: registering a
   second policy under the same name silently overwrites the first.** If this
   conversation already produced an unnamed router, don't reuse the same
-  derived name for the next one — ask, or pick a visibly different name.
+  derived name for the next one - ask, or pick a visibly different name.
 
-## Step 3 — Candidates and default
+## Step 3 - Candidates and default
 
 ```json
 "candidates": ["<answering models>"],
@@ -77,9 +77,9 @@ Always exactly this envelope (the parser rejects unknown or missing keys):
 ```
 
 `default_model` MUST be listed in `candidates`. Candidates should be
-chat-capable LLMs — not embedding, classification, or image models.
+chat-capable LLMs - not embedding, classification, or image models.
 
-## Step 4 — Mode A: LLM-as-router
+## Step 4 - Mode A: LLM-as-router
 
 ```json
 "router": {
@@ -91,18 +91,18 @@ chat-capable LLMs — not embedding, classification, or image models.
 
 - `model` defaults to the smallest candidate (it may be a candidate; it also
   works as a separate small model).
-- **Write intent only — never specify a reply format.** The engine
+- **Write intent only - never specify a reply format.** The engine
   unconditionally appends its own contract after your prompt: it lists the
   candidate names and demands a strict JSON reply `{"model": "<name>",
   "rationale": "<one sentence>"}`, then falls back to `default_model` on any
   deviation. A prompt that also says "reply with ONLY the model name" (or
   similar) is not just redundant, it's wrong about the wire format and can
   confuse weaker judge models into replying with a bare string that then
-  fails to parse — silently falling back to `default_model` on every request,
+  fails to parse - silently falling back to `default_model` on every request,
   with no visible error. Only describe *when to pick which candidate*.
 - Emit **no** `rules` and **no** `classifiers` key in this mode.
 
-## Step 5 — Mode B: classifiers
+## Step 5 - Mode B: classifiers
 
 Only declare classifiers the rules actually reference. Three types:
 
@@ -119,24 +119,24 @@ Only declare classifiers the rules actually reference. Three types:
   "labels": ["SAFE", "RISKY"], "default_label": "SAFE", "on_error": "match_false" }
 ```
 
-Hard constraints (parser-enforced — see `reference.md` for the full matrix):
+Hard constraints (parser-enforced - see `reference.md` for the full matrix):
 
 - `classifier` type: model should be a text-classification model (an
   `onnxruntime` encoder like `Bert-Phishing-ONNX`); `labels` must match the
   model's actual output labels. A chat LLM here is legal (LLM-as-classifier
-  via chat) but prefer `type: "llm"` for that — it is explicit and prompted.
+  via chat) but prefer `type: "llm"` for that - it is explicit and prompted.
 - `semantic_similarity`: `reference_phrases` is `{concept: [phrases...]}`,
   at least one concept, each with at least one phrase. Concept names ARE the
-  labels — a `labels` key is **rejected** for this type. Model must be an
+  labels - a `labels` key is **rejected** for this type. Model must be an
   embedding model. Give 3–5 varied phrases per concept when inventing them.
 - `llm`: `prompt` AND non-empty `labels` are both required.
 - `default_label`, when present, must be one of the labels/concepts.
 - Defaults when unspecified: `id` = `clf-1`, `clf-2`, …; `on_error` =
   `"match_false"` (fail-open: a broken classifier doesn't match, so requests
-  fall through — use `"match_true"` only when the user wants fail-closed
+  fall through - use `"match_true"` only when the user wants fail-closed
   safety); `default_label` = the first label.
 
-## Step 6 — Mode B: rules
+## Step 6 - Mode B: rules
 
 ```json
 "rules": [
@@ -145,35 +145,35 @@ Hard constraints (parser-enforced — see `reference.md` for the full matrix):
 ]
 ```
 
-- **Order matters — first match wins.** Put the most specific /
+- **Order matters - first match wins.** Put the most specific /
   privacy-critical rules first (a "sensitive stays local" rule must precede a
   "code goes to the big model" rule, or coding prompts with PII leak).
 - `route_to` MUST be a candidate. `id` uses only `[A-Za-z0-9._-]`; default
   `rule-1`, `rule-2`, ….
-- No rule for the "everything else" case — that is `default_model`.
+- No rule for the "everything else" case - that is `default_model`.
 
-**Match conditions** — combine with `all` (AND), `any` (OR), `not`; one
+**Match conditions** - combine with `all` (AND), `any` (OR), `not`; one
 condition per leaf object; nesting is allowed:
 
 | Leaf | Example | Notes |
 |------|---------|-------|
-| `keywords_any` / `keywords_all` | `{ "keywords_any": ["SSN", "Email"] }` | case-insensitive substring — `"hi"` matches inside `"this"`, `"shipping"`, `"high"`, etc. Use `regex` with `\b...\b` when word-boundary precision is needed |
+| `keywords_any` / `keywords_all` | `{ "keywords_any": ["SSN", "Email"] }` | case-insensitive substring - `"hi"` matches inside `"this"`, `"shipping"`, `"high"`, etc. Use `regex` with `\b...\b` when word-boundary precision is needed |
 | `regex` | `{ "regex": "\\b\\d{3}-?\\d{2}-?\\d{4}\\b" }` | ECMAScript flavor |
 | `min_chars` / `max_chars` | `{ "min_chars": 4000 }` | input length, UTF-8 bytes, non-negative integer |
 | `has_tools` / `has_images` | `{ "has_images": true }` | booleans |
 | `classifier` | `{ "classifier": "clf-1", "label": "PII", "min_score": 0.5 }` | band test; `min_score`/`max_score` in [0,1]; default `min_score` 0.5; omit `label` only if the classifier has `default_label` |
-| `metadata` | `{ "metadata": { "key": "consent", "equals": "denied" } }` | exactly one of `equals` / `any` / `exists`; note: not editable in the desktop UI yet — use only when the user asks for metadata routing |
+| `metadata` | `{ "metadata": { "key": "consent", "equals": "denied" } }` | exactly one of `equals` / `any` / `exists`; note: not editable in the desktop UI yet - use only when the user asks for metadata routing |
 
-## Step 7 — Components
+## Step 7 - Components
 
 `components` = union of: all `candidates` + every classifier `model` + the
 `router.model` (Mode A). Deduplicate, keep order stable. The parser rejects
 any referenced model that is not declared here.
 
-## Step 8 — Validate and output
+## Step 8 - Validate and output
 
 Write the JSON to a file, then **run the bundled offline validator** before
-presenting anything to the user — it mechanically re-checks every rule in
+presenting anything to the user - it mechanically re-checks every rule in
 `reference.md`'s validation checklist (score ranges, non-negative integer
 char counts, mode exclusivity, label/classifier references, the `model_name`
 collision, the router-prompt-contract mistake above, etc.) so you don't have
@@ -186,7 +186,7 @@ python3 scripts/validate.py router.json   # macOS/Linux
 
 It exits 0 with `"ready": true` when there are no errors (warnings/advisories
 may still be worth mentioning to the user). If it reports errors, fix the
-JSON and re-run — don't present JSON that fails this check. It is pure
+JSON and re-run - don't present JSON that fails this check. It is pure
 offline structural/numeric validation; it cannot verify a named model
 actually exists or has the right capability (chat/embedding/classification).
 
@@ -197,7 +197,7 @@ in a fenced block, then give the user these commands to run themselves:
 # 1. Check a model exists before registering
 curl http://localhost:13305/api/v1/models/<model-id>
 
-# 2. Register the policy (idempotent — re-POST to update)
+# 2. Register the policy (idempotent - re-POST to update)
 curl -X POST http://localhost:13305/api/v1/pull \
      -H "Content-Type: application/json" --data-binary @router.json
 
@@ -211,7 +211,7 @@ curl -X POST http://localhost:13305/api/v1/chat/completions \
 The `x-lemonade-route` response header carries the matched rule id (or
 `default`). With `"route_trace": true` the body also carries
 `x_lemonade_route`: `{ route_to, matched_rule, default_used, outputs,
-trace[] }` — useful for verifying each rule fires as expected.
+trace[] }` - useful for verifying each rule fires as expected.
 
 ## Defaults summary
 
@@ -225,8 +225,8 @@ trace[] }` — useful for verifying each rule fires as expected.
 | `default_label` | first label / concept |
 | `min_score` | `0.5` |
 | `outputs` | omit |
-| router prompt | intent only — no reply-format instruction (Step 4) |
+| router prompt | intent only - no reply-format instruction (Step 4) |
 
 Worked NL → JSON pairs live in `examples.md`; the full schema, parser error
 matrix, and model-capability table live in `reference.md`; the offline
-validator is `scripts/validate.py` (run it — see Step 8).
+validator is `scripts/validate.py` (run it - see Step 8).

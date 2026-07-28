@@ -3,13 +3,10 @@
 Each pair shows a user's natural-language request and the exact JSON the skill
 should produce. Note what was defaulted: names, ids, thresholds, `on_error`,
 `default_label`, and `model_name` all come from the defaults table in
-`SKILL.md` when the user doesn't specify them — including `model_name`, which
+`SKILL.md` when the user doesn't specify them - including `model_name`, which
 is derived from the default candidate rather than a fixed literal, so the
 examples below each get a distinct name.
 
-Examples 1–4 illustrate mechanics. Examples 5–7 are production-grade configs
-from a real enterprise deployment — use them as templates when the user's
-domain resembles HR, Benefits, or Finance.
 
 ## 1. Pure intent, no concrete signals → LLM-as-router
 
@@ -41,7 +38,7 @@ hiccup, requests stay on the model the user trusts with sensitive data).
 Note what's *not* in the prompt: no "reply with only the model name" or any
 other reply-format instruction. The engine appends its own strict JSON
 contract (`{"model": ..., "rationale": ...}`, listing the exact candidate
-names) after whatever the author writes — an authored format instruction
+names) after whatever the author writes - an authored format instruction
 would only contradict it. See `reference.md`'s
 [Validation checklist](#validation-checklist) item 12.
 
@@ -194,13 +191,6 @@ never answer requests.
 }
 ```
 
-Caveats worth repeating to the user with this output: the `labels` on a
-`type: "classifier"` entry must match the model's real output labels
-(`Bert-Phishing-ONNX` actually emits phishing-detection labels — verify with
-`GET /api/v1/models/Bert-Phishing-ONNX` or a `/v1/classify` probe before
-relying on `"PII"`/`"Jailbreak"`), and classifier leaves without an explicit
-`"label"` use the classifier's `default_label`.
-
 ## 4. Negation and metadata opt-out
 
 > Anything without tool calls goes to Phi-4-mini-GGUF; if the request metadata
@@ -239,21 +229,21 @@ if they open this policy there).
 
 ---
 
-## 5. HR chatbot — LLM-as-router with a privacy-first prompt
+## 5. HR chatbot - LLM-as-router with a privacy-first prompt
 
-> Build an HR assistant router. Any request with PII — names with salaries,
-> SSNs, bank accounts, equity details, dates of birth — must stay on the local
+> Build an HR assistant router. Any request with PII - names with salaries,
+> SSNs, bank accounts, equity details, dates of birth - must stay on the local
 > model. Everything else can go to the cloud model. When in doubt, keep it
 > local.
 
-"PII" is a meaning judgment, not a regex — the boundary is fuzzy and context-
+"PII" is a meaning judgment, not a regex - the boundary is fuzzy and context-
 dependent (a name alone is fine; a name + salary is not). That ambiguity is
 exactly what Mode A is designed for: a small LLM reads each request and
 decides. The router model doubles as `default_model` so a router hiccup never
 leaks to the cloud.
 
 The prompt describes *when* to pick each candidate. It does **not** tell the
-model how to format its reply — the engine appends its own `{"model": ...,
+model how to format its reply - the engine appends its own `{"model": ...,
 "rationale": ...}` contract.
 
 ```json
@@ -268,7 +258,7 @@ model how to format its reply — the engine appends its own `{"model": ...,
     "router": {
       "type": "llm",
       "model": "Qwen3.5-9B-NoThinking",
-      "prompt": "You are a routing assistant for an AI company. Your job is to choose which model should handle each request.\n\nUse Qwen3.5-9B-NoThinking (local, private) when:\n- The request contains personally identifiable information (PII), such as names with salaries, Social Security numbers (SSNs), bank account numbers, email addresses, compensation data, equity details, or dates of birth.\n- Data privacy is paramount — anything that should never leave the local machine.\n\nUse fireworks.kimi-k2p6 (cloud, powerful) for all other requests.\n\nIf the request is ambiguous, default to Qwen3.5-9B-NoThinking. When in doubt, prioritize privacy over capability."
+      "prompt": "You are a routing assistant for an AI company. Your job is to choose which model should handle each request.\n\nUse Qwen3.5-9B-NoThinking (local, private) when:\n- The request contains personally identifiable information (PII), such as names with salaries, Social Security numbers (SSNs), bank account numbers, email addresses, compensation data, equity details, or dates of birth.\n- Data privacy is paramount - anything that should never leave the local machine.\n\nUse fireworks.kimi-k2p6 (cloud, powerful) for all other requests.\n\nIf the request is ambiguous, default to Qwen3.5-9B-NoThinking. When in doubt, prioritize privacy over capability."
     }
   }
 }
@@ -278,13 +268,13 @@ model how to format its reply — the engine appends its own `{"model": ...,
 but misses "Alice's salary is sixty thousand". If the domain has natural-
 language PII, Mode A catches it; if the domain has structured PII (form
 inputs, database exports), regex is more reliable and cheaper (no extra LLM
-call per request). Use both together when both forms appear — put regex rules
+call per request). Use both together when both forms appear - put regex rules
 first (cheaper, no latency), then fall through to an LLM router or classifier
 for the fuzzy residual.
 
 ---
 
-## 6. Benefits chatbot — three-tier routing with max_chars and rich outputs
+## 6. Benefits chatbot - three-tier routing with max_chars and rich outputs
 
 > Route a benefits chatbot. Any request containing PII (email, salary, SSN,
 > equity, compensation, bank account, date of birth) must stay local on
@@ -297,7 +287,7 @@ for the fuzzy residual.
 Three tiers: **PII fence** first (privacy-critical, `on_error: match_true`
 would be appropriate but this config uses the default fail-open for
 simplicity), **complexity escalation** second, **domain fast-path** third.
-`outputs` carries two fields (`reason` + `data_class`/`tier`) — useful for
+`outputs` carries two fields (`reason` + `data_class`/`tier`) - useful for
 downstream logging and observability.
 
 New patterns not shown in examples 1–4:
@@ -358,13 +348,13 @@ New patterns not shown in examples 1–4:
 ```
 
 **Rule ordering matters here**: `pii-stays-local` fires first. A message like
-"what's the copay on my plan — my salary is $95K" would match both rule 1
+"what's the copay on my plan - my salary is $95K" would match both rule 1
 (salary keyword) and rule 3 (copay + short). Because rule 1 comes first, it
-routes local — correct. Reordering would leak PII to the cloud.
+routes local - correct. Reordering would leak PII to the cloud.
 
 ---
 
-## 7. Finance chatbot — semantic similarity + LLM classifier in tandem
+## 7. Finance chatbot - semantic similarity + LLM classifier in tandem
 
 > Build a finance assistant router for a startup. PII-flavored finance queries
 > (individual salaries, equity by person, payroll details) stay on the local
@@ -373,7 +363,7 @@ routes local — correct. Reordering would leak PII to the cloud.
 > runway, ARR) stay local. As a fallback, use a local LLM to judge whether a
 > request is COMPLEX or SIMPLE, routing COMPLEX to cloud. Default to local.
 
-The most advanced pattern: **two classifiers working in tandem** — a fast
+The most advanced pattern: **two classifiers working in tandem** - a fast
 embedding classifier (`semantic_similarity`) fires first to catch known
 patterns, then an LLM classifier acts as a catch-all judge for requests that
 didn't match any semantic bucket. Four rules, two classifier types, three
@@ -383,7 +373,7 @@ What's unique here not shown elsewhere:
 - Two classifiers declared; rules reference each independently
 - `semantic_similarity` with three distinct concept buckets (not just two)
 - An `llm` classifier used as a safety net *after* semantic matching, not as
-  the primary signal — keeps latency low for the common case
+  the primary signal - keeps latency low for the common case
 - Per-rule score thresholds tuned to the domain (0.65 for PII, 0.72 for deep
   modeling, 0.60 for simple lookups) rather than the default 0.5
 - `outputs` carries a `classifier` field to tell downstream code *which*

@@ -40,7 +40,7 @@ Allowed keys: `candidates`, `default_model`, `router`, `classifiers`, `rules`.
 |-----|----------|-----------|
 | `candidates` | yes | non-empty array of unique names; each declared in `components` |
 | `default_model` | yes | must be listed in `candidates` |
-| `router` | either this or `rules` | `{ "type": "llm", "model": <component>, "prompt": <non-empty> }` — no other keys. Mutually exclusive with `rules` AND `classifiers`. Desugars server-side into one llm classifier + identity rules. |
+| `router` | either this or `rules` | `{ "type": "llm", "model": <component>, "prompt": <non-empty> }` - no other keys. Mutually exclusive with `rules` AND `classifiers`. Desugars server-side into one llm classifier + identity rules. |
 | `classifiers` | no (rules mode only) | array; every entry must be referenced by some rule ideally |
 | `rules` | either this or `router` | non-empty array; first match wins |
 
@@ -53,9 +53,9 @@ Allowed keys: `id`, `type`, `model`, `prompt`, `labels`, `default_label`,
 |-------|--------------|----------------------|-------|
 | `id` | required, unique | required, unique | required, unique |
 | `model` | required | required (embedding model) | required (chat LLM) |
-| `prompt` | — | — | **required**, non-empty |
+| `prompt` | - | - | **required**, non-empty |
 | `labels` | optional (must match the model's real output labels) | **rejected** (concepts are the labels) | **required**, ≥ 1 entry |
-| `reference_phrases` | — | **required**: `{concept: [phrase, ...]}`, ≥1 concept, ≥1 phrase each | — |
+| `reference_phrases` | - | **required**: `{concept: [phrase, ...]}`, ≥1 concept, ≥1 phrase each | - |
 | `default_label` | optional; must be in `labels`; requires `labels` non-empty | optional; must be a concept name | optional; must be in `labels` |
 | `on_error` | `"match_false"` (default) or `"match_true"` | same | same |
 
@@ -63,7 +63,7 @@ Notes:
 
 - `on_error: match_false` = fail-open (classifier failure → condition doesn't
   match → request falls through, usually to `default_model`).
-  `match_true` = fail-closed (failure counts as a match — for safety rules
+  `match_true` = fail-closed (failure counts as a match - for safety rules
   where "can't check" should route to the restricted/local path).
 - A label-less `classifier` entry is legal (single-score models); its rule
   leaves then must not name a `label`.
@@ -75,7 +75,7 @@ Rule keys: `id`, `match`, `route_to`, `outputs`.
 
 - `id`: required, unique, charset `[A-Za-z0-9._-]`.
 - `route_to`: required, must be a candidate.
-- `outputs`: optional object, copied verbatim into the routing decision — the
+- `outputs`: optional object, copied verbatim into the routing decision - the
   engine never interprets it. Use for human-readable reasons or downstream
   tags (`{"reason": "privacy"}`, `{"route_category": "cloud"}`).
 - `match`: a match expression.
@@ -85,12 +85,12 @@ Match-expression grammar:
 - Logical node: exactly ONE of `all: [...]`, `any: [...]`, `not: {...}` and
   nothing else in that object. Arrays non-empty. Nesting allowed (depth ≤ 64).
 - Leaf node: one or more condition keys (multiple keys in one leaf are an
-  implicit AND, but prefer one condition per leaf — see
+  implicit AND, but prefer one condition per leaf - see
   [Desktop-editor compatibility](#desktop-editor-compatibility)).
 
 | Condition | Value | Semantics |
 |-----------|-------|-----------|
-| `keywords_any` | non-empty array of non-empty strings | case-insensitive substring, any — `"hi"` also matches inside `"this"`, `"shipping"`, `"high"`, etc. Use `regex` `\b...\b` for word-boundary matching |
+| `keywords_any` | non-empty array of non-empty strings | case-insensitive substring, any - `"hi"` also matches inside `"this"`, `"shipping"`, `"high"`, etc. Use `regex` `\b...\b` for word-boundary matching |
 | `keywords_all` | same | all must appear; same substring semantics as `keywords_any` |
 | `regex` | non-empty string | ECMAScript regex over the input text |
 | `min_chars` / `max_chars` | integer ≥ 0 | input length in **UTF-8 bytes** |
@@ -105,23 +105,23 @@ The routed input text is the last user message (chat), the `prompt`
 
 ## Model capability requirements
 
-Checked at registration time — a mismatch fails the `/pull`:
+Checked at registration time - a mismatch fails the `/pull`:
 
 | Role | Needs | Typical models |
 |------|-------|----------------|
 | candidate / `router.model` / `llm` classifier | chat-capable LLM | `*-GGUF` chat models, cloud models |
 | `semantic_similarity` model | embeddings | `nomic-embed-text-*-GGUF` |
-| `classifier` model | classification output (onnxruntime encoder) — or a chat LLM (LLM-as-classifier via chat; prefer `type: "llm"`) | `Bert-Phishing-ONNX`, `Phishing-Email-Detection-ONNX` |
+| `classifier` model | classification output (onnxruntime encoder) - or a chat LLM (LLM-as-classifier via chat; prefer `type: "llm"`) | `Bert-Phishing-ONNX`, `Phishing-Email-Detection-ONNX` |
 
 Cloud candidates (`fireworks.<id>` etc.) are valid but only exist after the
-provider is installed and authenticated — tell the user to run
+provider is installed and authenticated - tell the user to run
 `lemonade cloud install <provider>` + auth **before** registering the policy.
 
 ## Validation checklist
 
 Every generated policy must pass all of these before it is shown to the user.
 Items 1–9 are mechanically enforced by `scripts/validate.py` (see `SKILL.md`
-Step 8) — run it rather than re-deriving these by eye. Items 10–12 need
+Step 8) - run it rather than re-deriving these by eye. Items 10–12 need
 authoring judgment and aren't (fully) checkable by a script.
 
 1. Root has exactly `version "1"`, `model_name` (`user.` prefix), `recipe
@@ -139,13 +139,13 @@ authoring judgment and aren't (fully) checkable by a script.
 8. `llm` classifiers have `prompt` + `labels`; `semantic_similarity` have
    `reference_phrases` and NO `labels`; `default_label` ∈ labels/concepts.
 9. Scores in [0,1] with min ≤ max; char counts are non-negative integers
-   (not a float, not a bool — Python/JSON `true`/`false` are not integers);
+   (not a float, not a bool - Python/JSON `true`/`false` are not integers);
    keyword arrays contain only non-empty strings.
 10. Privacy/safety rules are ordered before broader routing rules.
 11. `model_name` isn't a name already used earlier in this conversation
-    (`/pull` is idempotent per `model_name` — a collision silently overwrites
+    (`/pull` is idempotent per `model_name` - a collision silently overwrites
     the earlier registration, not an error).
-12. A `routing.router.prompt` describes intent only — it never tells the
+12. A `routing.router.prompt` describes intent only - it never tells the
     model how to format its reply. The engine appends its own JSON
     `{model, rationale}` contract unconditionally; an authored instruction
     like "reply with only the model name" contradicts it and, with a weaker
@@ -173,7 +173,7 @@ curl -X POST http://localhost:13305/api/v1/delete \
 Every routed response carries the `x-lemonade-route` header (matched rule id
 or `default`). With `"route_trace": true` the body also carries
 `x_lemonade_route`: `{ route_to, matched_rule, default_used, outputs,
-trace[] }` — use it to demonstrate each rule to the user. Registration errors
+trace[] }` - use it to demonstrate each rule to the user. Registration errors
 come back as descriptive parser messages (e.g. `routing.default_model 'X'
 must be listed in routing.candidates`); fix the field it names and re-POST.
 
@@ -186,7 +186,7 @@ there:
 - One condition per leaf object. Compound leaves (`{"min_chars": 5,
   "has_tools": true}`) are valid server-side but the editor cannot display
   them and will warn it must drop them on save.
-- `metadata` conditions are JSON-only for now — the editor shows a lossy-edit
+- `metadata` conditions are JSON-only for now - the editor shows a lossy-edit
   warning for rules containing them. Generate them only when the user
   explicitly wants metadata routing, and say so in your reply.
 - Everything else in this reference (nested `all`/`any`/`not`, all three
