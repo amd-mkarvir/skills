@@ -156,7 +156,7 @@ condition per leaf object; nesting is allowed:
 
 | Leaf | Example | Notes |
 |------|---------|-------|
-| `keywords_any` / `keywords_all` | `{ "keywords_any": ["SSN", "Email"] }` | case-insensitive substring |
+| `keywords_any` / `keywords_all` | `{ "keywords_any": ["SSN", "Email"] }` | case-insensitive substring — `"hi"` matches inside `"this"`, `"shipping"`, `"high"`, etc. Use `regex` with `\b...\b` when word-boundary precision is needed |
 | `regex` | `{ "regex": "\\b\\d{3}-?\\d{2}-?\\d{4}\\b" }` | ECMAScript flavor |
 | `min_chars` / `max_chars` | `{ "min_chars": 4000 }` | input length, UTF-8 bytes, non-negative integer |
 | `has_tools` / `has_images` | `{ "has_images": true }` | booleans |
@@ -179,7 +179,8 @@ collision, the router-prompt-contract mistake above, etc.) so you don't have
 to re-derive them by eye every time:
 
 ```bash
-python3 scripts/validate.py router.json
+python scripts/validate.py router.json    # Windows
+python3 scripts/validate.py router.json   # macOS/Linux
 ```
 
 It exits 0 with `"ready": true` when there are no errors (warnings/advisories

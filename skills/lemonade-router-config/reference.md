@@ -90,8 +90,8 @@ Match-expression grammar:
 
 | Condition | Value | Semantics |
 |-----------|-------|-----------|
-| `keywords_any` | non-empty array of non-empty strings | case-insensitive substring, any |
-| `keywords_all` | same | all must appear |
+| `keywords_any` | non-empty array of non-empty strings | case-insensitive substring, any — `"hi"` also matches inside `"this"`, `"shipping"`, `"high"`, etc. Use `regex` `\b...\b` for word-boundary matching |
+| `keywords_all` | same | all must appear; same substring semantics as `keywords_any` |
 | `regex` | non-empty string | ECMAScript regex over the input text |
 | `min_chars` / `max_chars` | integer ≥ 0 | input length in **UTF-8 bytes** |
 | `has_tools` / `has_images` | boolean | request carries `tools[]` / image parts. `false` is legal and means "must NOT have"; `{"not": {"has_tools": true}}` is the equivalent preferred spelling |
