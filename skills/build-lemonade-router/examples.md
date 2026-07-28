@@ -40,7 +40,7 @@ other reply-format instruction. The engine appends its own strict JSON
 contract (`{"model": ..., "rationale": ...}`, listing the exact candidate
 names) after whatever the author writes - an authored format instruction
 would only contradict it. See `reference.md`'s
-[Validation checklist](#validation-checklist) item 12.
+[Validation checklist](reference.md#validation-checklist) item 12.
 
 ## 2. Concrete signals, no classifiers → deterministic rules
 
