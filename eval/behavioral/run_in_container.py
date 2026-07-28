@@ -29,6 +29,7 @@ import argparse
 import hashlib
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -148,9 +149,80 @@ def _run(cmd: list[str]) -> int:
     return subprocess.run(cmd).returncode
 
 
-def _build(cfg: dict, tag: str) -> int:
-    cmd = [
-        "docker", "build",
+def _install_docker_linux() -> None:
+    """Install Docker Engine via the official convenience script."""
+    sudo = ["sudo"] if hasattr(os, "geteuid") and os.geteuid() != 0 and shutil.which("sudo") else []
+    dl = subprocess.run(
+        ["curl", "-fsSL", "https://get.docker.com", "-o", "/tmp/get-docker.sh"]
+    )
+    if dl.returncode != 0:
+        raise SystemExit("error: failed to download the Docker install script (is curl available / network reachable?)")
+    rc = _run(sudo + ["sh", "/tmp/get-docker.sh"])
+    if rc != 0:
+        raise SystemExit(f"error: Docker install script failed (exit {rc})")
+    # Best effort: make sure the daemon is running (systemd hosts).
+    if shutil.which("systemctl"):
+        _run(sudo + ["systemctl", "enable", "--now", "docker"])
+
+
+def _install_docker_windows() -> None:
+    """Best-effort Docker install for Windows self-hosted runners.
+
+    Windows-container support generally needs the 'Containers' feature and a
+    reboot, which a single CI job cannot perform, so surface an actionable
+    error rather than hanging when that is the case.
+    """
+    ps = (
+        "$ErrorActionPreference='Stop';"
+        "Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null;"
+        "Install-Module -Name DockerMsftProvider -Repository PSGallery -Force;"
+        "Install-Package -Name docker -ProviderName DockerMsftProvider -Force;"
+        "Start-Service docker"
+    )
+    rc = _run(["powershell", "-NoProfile", "-NoLogo", "-Command", ps])
+    if rc != 0:
+        raise SystemExit(
+            "error: automatic Docker install on Windows failed. Windows-"
+            "container support usually needs the 'Containers' feature and a "
+            "reboot, which a CI job cannot perform. Install Docker (in "
+            "Windows-container mode) on this runner once, then retry."
+        )
+
+
+def _ensure_docker(os_name: str) -> list[str]:
+    """Make sure ``docker`` is usable, installing it if missing, and return the
+    command prefix to invoke it (``["sudo", "docker"]`` when the daemon socket
+    needs elevation on Linux)."""
+    if shutil.which("docker") is None:
+        print("[run_in_container] 'docker' not found on PATH; installing...", flush=True)
+        if os_name == "linux":
+            _install_docker_linux()
+        else:
+            _install_docker_windows()
+        if shutil.which("docker") is None:
+            raise SystemExit(
+                "error: 'docker' is still not available after attempting to "
+                "install it. Install Docker on this runner and retry."
+            )
+
+    if os_name != "linux":
+        return ["docker"]
+
+    # On Linux the daemon socket is root-owned; if the current user can't reach
+    # it (e.g. freshly installed and not yet in the 'docker' group this
+    # session), fall back to sudo so we don't fail on a permissions error.
+    if subprocess.run(["docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        return ["docker"]
+    if shutil.which("sudo") and subprocess.run(
+        ["sudo", "-n", "docker", "info"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode == 0:
+        return ["sudo", "docker"]
+    return ["docker"]
+
+
+def _build(docker: list[str], cfg: dict, tag: str) -> int:
+    cmd = list(docker) + [
+        "build",
         "-f", cfg["dockerfile"],
         "-t", tag,
         str(REPO_ROOT),
@@ -158,9 +230,9 @@ def _build(cfg: dict, tag: str) -> int:
     return _run(cmd)
 
 
-def _docker_run_prefix(cfg: dict, skill: str) -> list[str]:
-    cmd = [
-        "docker", "run", "--rm",
+def _docker_run_prefix(docker: list[str], cfg: dict, skill: str) -> list[str]:
+    cmd = list(docker) + [
+        "run", "--rm",
         "--security-opt", "no-new-privileges",
         "--pids-limit", "1024",
         "-w", cfg["workdir"],
@@ -194,6 +266,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Container platform (defaults to the host OS).",
     )
     parser.add_argument(
+        "--ensure-docker",
+        action="store_true",
+        help="Only make sure Docker is installed/usable (installing it if "
+             "missing), then exit. Used as a visible CI setup step.",
+    )
+    parser.add_argument(
         "--preflight",
         action="store_true",
         help="Only build the image and verify the GPU/NPU is visible inside "
@@ -206,17 +284,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    docker = _ensure_docker(args.os_name)
+    if args.ensure_docker:
+        print(f"[run_in_container] docker ready: {' '.join(docker)}", flush=True)
+        return 0
+
     cfg = _os_config(args.os_name)
     tag = _image_tag(cfg)
 
     if not args.no_build:
-        rc = _build(cfg, tag)
+        rc = _build(docker, cfg, tag)
         if rc != 0:
             print(f"[run_in_container] image build failed (exit {rc})", file=sys.stderr)
             return rc
 
     if args.preflight:
-        cmd = _docker_run_prefix(cfg, args.skill) + [tag] + cfg["device_check"]
+        cmd = _docker_run_prefix(docker, cfg, args.skill) + [tag] + cfg["device_check"]
         rc = _run(cmd)
         if rc != 0:
             print(
@@ -227,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         return rc
 
-    cmd = _docker_run_prefix(cfg, args.skill) + [tag] + _test_command(args.skill)
+    cmd = _docker_run_prefix(docker, cfg, args.skill) + [tag] + _test_command(args.skill)
     return _run(cmd)
 
 

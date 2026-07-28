@@ -127,6 +127,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Make sure Docker is present on the runner, installing it if missing
+      # (Linux: official convenience script; Windows: best effort -- see the
+      # launcher). Kept as its own step so a provisioning failure is obvious.
+      - name: Ensure Docker is installed
+        run: python eval/behavioral/run_in_container.py --skill "${{ matrix.skill }}" --ensure-docker
+
       # Build the image and confirm the GPU/NPU is actually visible inside the
       # container before spending tokens. Fails loudly if passthrough is
       # unavailable (notably the open question for Windows NPU) instead of
