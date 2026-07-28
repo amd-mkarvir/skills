@@ -1,0 +1,51 @@
+# Behavioral-test runtime for the self-hosted Strix Halo *Linux* runners.
+#
+# The behavioral suite runs a real agent with --dangerously-skip-permissions,
+# so on CI we run it inside this container to keep a tested skill from touching
+# the runner host. The skill itself installs Lemonade Server and pulls models
+# *inside* this container, so the image only needs the AMD userspace runtime
+# that matches the passed-through devices (/dev/kfd, /dev/dri, /dev/accel/*)
+# plus Python / Node / the claude CLI. See eval/behavioral/run_in_container.py
+# for how it is built and run.
+#
+# Build context is the repo root (so requirements.txt can be copied for a
+# cache-friendly dependency layer).
+FROM rocm/dev-ubuntu-22.04:latest
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    NODE_MAJOR=20
+
+# Python 3.12 (via deadsnakes), git, curl, and Node 20 + the claude CLI.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates curl git gnupg \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3.12 python3.12-venv python3.12-dev \
+    && curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12 \
+    && npm install -g @anthropic-ai/claude-code \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make python/python3 resolve to 3.12 for the harness subprocess calls.
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1 \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1
+
+# Behavioral-test Python deps (pytest). Copied separately so this layer is
+# cached until requirements.txt actually changes.
+COPY eval/behavioral/requirements.txt /tmp/requirements.txt
+RUN python3.12 -m pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Run as a non-root user that can reach the GPU/NPU render nodes. The launcher
+# additionally passes --group-add for the host's video/render GIDs, since those
+# numeric GIDs are host-specific and cannot be baked into the image.
+RUN groupadd -f -g 44 video \
+    && groupadd -f -g 109 render \
+    && useradd -m -s /bin/bash -G video,render behavioral
+USER behavioral
+
+WORKDIR /work/eval/behavioral

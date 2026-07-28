@@ -48,6 +48,11 @@ INFRA_FILES = {
     "eval/behavioral/conftest.py",
     "eval/behavioral/pytest.ini",
     "eval/behavioral/requirements.txt",
+    # The CI container definition (used on the self-hosted runners) is shared
+    # harness too: changing it can affect every skill's run, so re-run all.
+    "eval/behavioral/run_in_container.py",
+    "eval/behavioral/Dockerfile.linux",
+    "eval/behavioral/Dockerfile.windows",
     "eval/claude_eval.py",
     ".github/scripts/select_behavioral.py",
     ".github/workflows/behavioral.yml",

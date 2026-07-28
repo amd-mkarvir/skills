@@ -1,0 +1,35 @@
+# Behavioral-test runtime for the self-hosted Strix Halo *Windows* runners.
+#
+# Windows counterpart to Dockerfile.linux. It is run with process isolation
+# (see eval/behavioral/run_in_container.py) so the tested skill can reach the
+# host GPU/NPU while still being unable to modify the runner host outside the
+# container. NPU (XDNA) passthrough into Windows containers is not guaranteed;
+# the workflow runs a device preflight that fails loudly if it is unavailable.
+#
+# The base image tag MUST match the host Windows build for process isolation.
+# ltsc2022 is the default; override with --build-arg WINDOWS_BASE=... if the
+# runner is on a different build.
+ARG WINDOWS_BASE=mcr.microsoft.com/windows/servercore:ltsc2022
+FROM ${WINDOWS_BASE}
+
+SHELL ["powershell", "-NoLogo", "-NoProfile", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
+
+ENV PYTHONUNBUFFERED=1
+
+# Python 3.12 (per-machine, added to PATH).
+RUN Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe' -OutFile 'C:\\python.exe'; \
+    Start-Process -FilePath 'C:\\python.exe' -ArgumentList '/quiet','InstallAllUsers=1','PrependPath=1','Include_pip=1' -Wait; \
+    Remove-Item 'C:\\python.exe' -Force
+
+# Node 20 (msi, adds itself + the global npm prefix to PATH).
+RUN Invoke-WebRequest -Uri 'https://nodejs.org/dist/v20.18.0/node-v20.18.0-x64.msi' -OutFile 'C:\\node.msi'; \
+    Start-Process msiexec.exe -ArgumentList '/i','C:\\node.msi','/quiet','/norestart' -Wait; \
+    Remove-Item 'C:\\node.msi' -Force
+
+# claude CLI + behavioral-test Python deps. requirements.txt is copied first so
+# the pip layer is cached until it changes.
+RUN npm install -g @anthropic-ai/claude-code
+COPY eval/behavioral/requirements.txt C:/tmp/requirements.txt
+RUN python -m pip install --no-cache-dir -r C:/tmp/requirements.txt
+
+WORKDIR C:/work/eval/behavioral

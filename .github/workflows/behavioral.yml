@@ -89,6 +89,12 @@ jobs:
     if: needs.discover.outputs.any == 'true'
     # Self-hosted Strix Halo runners. The OS label (Linux / Windows) comes from
     # the matrix below so each skill is exercised on both platforms.
+    #
+    # Unlike a local run, CI runs the suite INSIDE a device-passthrough
+    # container (see eval/behavioral/run_in_container.py). The tested skill runs
+    # with --dangerously-skip-permissions and installs Lemonade / pulls models,
+    # so the container keeps it from modifying the runner host while still
+    # giving it the GPU/NPU it needs to actually run inference.
     runs-on: [self-hosted, strix_halo, "${{ matrix.os }}"]
     # Behavioral runs install local models and can take a while; cap it so a
     # hung agent or stalled model pull fails the job instead of burning minutes.
@@ -113,42 +119,23 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # Host Python only needs to launch the container wrapper; Node, the claude
+      # CLI, and the pytest deps all live inside the image (see the Dockerfiles),
+      # so nothing the skill installs lands on the runner.
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+      # Build the image and confirm the GPU/NPU is actually visible inside the
+      # container before spending tokens. Fails loudly if passthrough is
+      # unavailable (notably the open question for Windows NPU) instead of
+      # silently producing no output.
+      - name: Verify accelerator is visible in the container
+        run: python eval/behavioral/run_in_container.py --skill "${{ matrix.skill }}" --preflight
 
-      - name: Install the claude CLI
-        run: npm install -g @anthropic-ai/claude-code
-
-      - name: Install behavioral test dependencies
-        run: pip install -r eval/behavioral/requirements.txt
-
-      - name: Run behavioral test for ${{ matrix.skill }} (Linux)
-        if: matrix.os == 'Linux'
-        working-directory: eval/behavioral
-        shell: bash
-        run: |
-          set -euo pipefail
-          test_file="../../skills/${{ matrix.skill }}/evals/evals.py"
-          echo "Running $test_file"
-          python -m pytest -c pytest.ini -p conftest "$test_file"
-
-      - name: Run behavioral test for ${{ matrix.skill }} (Windows)
-        if: matrix.os == 'Windows'
-        working-directory: eval/behavioral
-        shell: powershell
-        run: |
-          $ErrorActionPreference = "Stop"
-          $skill = "${{ matrix.skill }}"
-          $test_file = "../../skills/$skill/evals/evals.py"
-          Write-Host "Running $test_file"
-          python -m pytest -c pytest.ini -p conftest $test_file
+      - name: Run behavioral test for ${{ matrix.skill }} in a container
+        run: python eval/behavioral/run_in_container.py --skill "${{ matrix.skill }}"
 
   # Single aggregate gate. Mark THIS check required in branch protection.
   #
