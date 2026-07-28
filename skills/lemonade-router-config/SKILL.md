@@ -2,7 +2,8 @@
 name: lemonade-router-config
 description: >-
   Turns a natural-language description of routing intent into a valid Lemonade
-  `collection.router` policy JSON, ready to register via `POST /api/v1/pull`.
+  `collection.router` policy JSON. The skill generates and validates the JSON
+  only — it does not register it or call the live server.
   Use when the user wants to route requests between models ("route sensitive
   queries to X and everything else to Y"), generate a router/hybrid-router
   config or policy, author a collection.router JSON, split traffic between a
@@ -15,10 +16,10 @@ description: >-
 # Lemonade Router Config Generator
 
 Generate a **`collection.router` policy JSON** from a plain-English description
-of how requests should be routed. The output registers against a Lemonade
-server (v10.1.0+) with one `POST /api/v1/pull` call, is accepted by the strict
-server-side parser on the first try, and stays editable in the desktop app's
-Hybrid Router editor.
+of how requests should be routed. The skill produces and validates the JSON
+only — it does not call the live server, register the policy, or run requests
+through it. The JSON is accepted by the strict server-side parser on the first
+try and stays editable in the desktop app's Hybrid Router editor.
 
 The router picks one **candidate** model per request. Two authoring modes
 exist, and choosing the right one is the first decision:
@@ -169,7 +170,7 @@ condition per leaf object; nesting is allowed:
 `router.model` (Mode A). Deduplicate, keep order stable. The parser rejects
 any referenced model that is not declared here.
 
-## Step 8 — Validate, output, verify
+## Step 8 — Validate and output
 
 Write the JSON to a file, then **run the bundled offline validator** before
 presenting anything to the user — it mechanically re-checks every rule in
@@ -187,24 +188,30 @@ It exits 0 with `"ready": true` when there are no errors (warnings/advisories
 may still be worth mentioning to the user). If it reports errors, fix the
 JSON and re-run — don't present JSON that fails this check. It is pure
 offline structural/numeric validation; it cannot verify a named model
-actually exists or has the right capability (chat/embedding/classification)
-— that needs a live server (see below).
+actually exists or has the right capability (chat/embedding/classification).
 
-Then output the JSON in a fenced block, plus how to use it:
+**Do not call the live server.** The skill's job ends here. Output the JSON
+in a fenced block, then give the user these commands to run themselves:
 
 ```bash
+# 1. Check a model exists before registering
+curl http://localhost:13305/api/v1/models/<model-id>
+
+# 2. Register the policy (idempotent — re-POST to update)
 curl -X POST http://localhost:13305/api/v1/pull \
      -H "Content-Type: application/json" --data-binary @router.json
+
+# 3. Route a request and inspect the decision
+curl -X POST http://localhost:13305/api/v1/chat/completions \
+     -H "Content-Type: application/json" \
+     -d '{"model": "<model_name>", "route_trace": true,
+          "messages": [{"role": "user", "content": "<test prompt>"}]}'
 ```
 
-Point any OpenAI client's `model` field at the collection name to route. To
-show the user *why* a request went where it did, add `"route_trace": true` to a
-request body and read the `x_lemonade_route` object (and the
-`x-lemonade-route` response header). If a Lemonade server is reachable in this
-session, offer to also verify each named model with `GET
-/api/v1/models/{id}` (catches a plausible-but-nonexistent name before it
-wastes a `/pull` round-trip), then register the policy and run one trace
-request as a smoke test.
+The `x-lemonade-route` response header carries the matched rule id (or
+`default`). With `"route_trace": true` the body also carries
+`x_lemonade_route`: `{ route_to, matched_rule, default_used, outputs,
+trace[] }` — useful for verifying each rule fires as expected.
 
 ## Defaults summary
 
