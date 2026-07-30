@@ -21,6 +21,16 @@ only - it does not call the live server, register the policy, or run requests
 through it. The JSON is accepted by the strict server-side parser on the first
 try and stays editable in the desktop app's Hybrid Router editor.
 
+## Prerequisites
+
+- **Lemonade Server v10.1.0+** running locally (`lemonade server start`).
+  Required only to register and test the generated policy - the skill itself
+  (JSON generation + offline validation) works without a live server.
+- **No GPU or ROCm dependency** for authoring. The router policy is a JSON
+  document; no hardware is needed to generate or validate it.
+- **Python** (any 3.x) in PATH - used by the bundled offline validator
+  (`scripts/validate.py`). No extra packages required.
+
 The router picks one **candidate** model per request. Two authoring modes
 exist, and choosing the right one is the first decision:
 
@@ -129,7 +139,14 @@ Hard constraints (parser-enforced - see `reference.md` for the full matrix):
   at least one concept, each with at least one phrase. Concept names ARE the
   labels - a `labels` key is **rejected** for this type. Model must be an
   embedding model. Give 3–5 varied phrases per concept when inventing them.
-- `llm`: `prompt` AND non-empty `labels` are both required.
+- `llm`: `prompt` AND non-empty `labels` are both required. **Write intent
+  only - never tell the model how to format its reply.** The engine appends
+  its own `{"model": "<chosen_label>", "rationale": "..."}` contract after
+  your prompt (the same contract as `routing.router`). An authored line like
+  "Reply with exactly one label: SAFE or RISKY" causes weaker models to output
+  bare `SAFE`, which the parser rejects - the score comes back empty and the
+  rule silently never fires. Describe what makes a request belong to each
+  label; leave the reply format to the engine.
 - `default_label`, when present, must be one of the labels/concepts.
 - Defaults when unspecified: `id` = `clf-1`, `clf-2`, …; `on_error` =
   `"match_false"` (fail-open: a broken classifier doesn't match, so requests

@@ -174,7 +174,7 @@ never answer requests.
         "match": {
           "all": [
             { "classifier": "clf-2", "min_score": 0.5 },
-            { "keywords_all": ["apparel", "clothes"] },
+            { "keywords_any": ["apparel", "clothes", "clothing"] },
             { "has_images": true },
             {
               "any": [
@@ -251,14 +251,14 @@ model how to format its reply - the engine appends its own `{"model": ...,
   "version": "1",
   "model_name": "user.HR-Admin-Router",
   "recipe": "collection.router",
-  "components": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
+  "components": ["Qwen3.5-9B-GGUF", "fireworks.kimi-k2p6"],
   "routing": {
-    "candidates": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
-    "default_model": "Qwen3.5-9B-NoThinking",
+    "candidates": ["Qwen3.5-9B-GGUF", "fireworks.kimi-k2p6"],
+    "default_model": "Qwen3.5-9B-GGUF",
     "router": {
       "type": "llm",
-      "model": "Qwen3.5-9B-NoThinking",
-      "prompt": "You are a routing assistant for an AI company. Your job is to choose which model should handle each request.\n\nUse Qwen3.5-9B-NoThinking (local, private) when:\n- The request contains personally identifiable information (PII), such as names with salaries, Social Security numbers (SSNs), bank account numbers, email addresses, compensation data, equity details, or dates of birth.\n- Data privacy is paramount - anything that should never leave the local machine.\n\nUse fireworks.kimi-k2p6 (cloud, powerful) for all other requests.\n\nIf the request is ambiguous, default to Qwen3.5-9B-NoThinking. When in doubt, prioritize privacy over capability."
+      "model": "Qwen3.5-9B-GGUF",
+      "prompt": "You are a routing assistant for an AI company. Your job is to choose which model should handle each request.\n\nUse Qwen3.5-9B-GGUF (local, private) when:\n- The request contains personally identifiable information (PII), such as names with salaries, Social Security numbers (SSNs), bank account numbers, email addresses, compensation data, equity details, or dates of birth.\n- Data privacy is paramount - anything that should never leave the local machine.\n\nUse fireworks.kimi-k2p6 (cloud, powerful) for all other requests.\n\nIf the request is ambiguous, default to Qwen3.5-9B-GGUF. When in doubt, prioritize privacy over capability."
     }
   }
 }
@@ -278,7 +278,7 @@ for the fuzzy residual.
 
 > Route a benefits chatbot. Any request containing PII (email, salary, SSN,
 > equity, compensation, bank account, date of birth) must stay local on
-> `Qwen3.5-9B-NoThinking`. Complex analysis (comparison, benchmarking,
+> `Qwen3.5-9B-GGUF`. Complex analysis (comparison, benchmarking,
 > optimization, or anything longer than 800 characters) goes to
 > `fireworks.kimi-k2p6`. Short, simple benefit lookups (401k, PTO, healthcare,
 > open enrollment, etc. under 400 characters) also stay local. Default to
@@ -302,9 +302,9 @@ New patterns not shown in examples 1–4:
   "version": "1",
   "model_name": "user.Benefits-Router",
   "recipe": "collection.router",
-  "components": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
+  "components": ["Qwen3.5-9B-GGUF", "fireworks.kimi-k2p6"],
   "routing": {
-    "candidates": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
+    "candidates": ["Qwen3.5-9B-GGUF", "fireworks.kimi-k2p6"],
     "default_model": "fireworks.kimi-k2p6",
     "rules": [
       {
@@ -317,7 +317,7 @@ New patterns not shown in examples 1–4:
             { "keywords_any": ["salary", "equity", "ssn", "social security", "bank account", "date of birth", "compensation"] }
           ]
         },
-        "route_to": "Qwen3.5-9B-NoThinking",
+        "route_to": "Qwen3.5-9B-GGUF",
         "outputs": { "reason": "pii-detected", "data_class": "sensitive" }
       },
       {
@@ -339,7 +339,7 @@ New patterns not shown in examples 1–4:
             { "keywords_any": ["401k", "401(k)", "vesting", "parental leave", "PTO", "vacation", "healthcare", "dental", "vision", "FSA", "HSA", "COBRA", "open enrollment", "qualifying life event", "copay", "deductible", "premium", "handbook", "policy", "onboard"] }
           ]
         },
-        "route_to": "Qwen3.5-9B-NoThinking",
+        "route_to": "Qwen3.5-9B-GGUF",
         "outputs": { "reason": "simple-benefits-rag", "tier": "local-fast" }
       }
     ]
@@ -386,12 +386,12 @@ What's unique here not shown elsewhere:
   "recipe": "collection.router",
   "components": [
     "fireworks.kimi-k2p6",
-    "Qwen3.5-9B-NoThinking",
+    "Qwen3.5-9B-GGUF",
     "embeddinggemma-300m-qat-q8_0-GGUF-Q8_0"
   ],
   "routing": {
-    "candidates": ["Qwen3.5-9B-NoThinking", "fireworks.kimi-k2p6"],
-    "default_model": "Qwen3.5-9B-NoThinking",
+    "candidates": ["Qwen3.5-9B-GGUF", "fireworks.kimi-k2p6"],
+    "default_model": "Qwen3.5-9B-GGUF",
     "classifiers": [
       {
         "id": "finance-topic",
@@ -428,8 +428,8 @@ What's unique here not shown elsewhere:
       {
         "id": "complexity",
         "type": "llm",
-        "model": "Qwen3.5-9B-NoThinking",
-        "prompt": "You are a financial complexity classifier. Assess whether this finance request requires deep multi-step modeling and cloud-level reasoning, or is a simple metric lookup that a local model can handle.\n\nClassify as COMPLEX if the request involves: statistical modeling, simulations, multi-variable forecasting, cohort analysis, cap table calculations, or synthesizing multiple data sources.\n\nClassify as SIMPLE if the request is a direct data lookup, a single metric question, or a short factual query.\n\nReply with exactly one label: COMPLEX or SIMPLE.",
+        "model": "Qwen3.5-9B-GGUF",
+        "prompt": "You are a financial complexity classifier. Assess whether this finance request requires deep multi-step modeling and cloud-level reasoning, or is a simple metric lookup that a local model can handle.\n\nClassify as COMPLEX if the request involves: statistical modeling, simulations, multi-variable forecasting, cohort analysis, cap table calculations, or synthesizing multiple data sources.\n\nClassify as SIMPLE if the request is a direct data lookup, a single metric question, or a short factual query.",
         "labels": ["COMPLEX", "SIMPLE"],
         "default_label": "SIMPLE",
         "on_error": "match_false"
@@ -439,7 +439,7 @@ What's unique here not shown elsewhere:
       {
         "id": "pii-finance-semantic",
         "match": { "classifier": "finance-topic", "label": "pii-finance", "min_score": 0.65 },
-        "route_to": "Qwen3.5-9B-NoThinking",
+        "route_to": "Qwen3.5-9B-GGUF",
         "outputs": { "reason": "pii-semantic-finance", "data_class": "sensitive", "classifier": "semantic_similarity" }
       },
       {
@@ -457,7 +457,7 @@ What's unique here not shown elsewhere:
       {
         "id": "simple-metric-lookup",
         "match": { "classifier": "finance-topic", "label": "simple-lookup", "min_score": 0.60 },
-        "route_to": "Qwen3.5-9B-NoThinking",
+        "route_to": "Qwen3.5-9B-GGUF",
         "outputs": { "reason": "simple-metric-lookup", "tier": "local-fast", "classifier": "semantic_similarity" }
       }
     ]

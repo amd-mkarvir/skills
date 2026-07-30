@@ -37,9 +37,19 @@ LOGICAL_KEYS = {"all", "any", "not"}
 CLASSIFIER_TYPES = {"classifier", "semantic_similarity", "llm"}
 ON_ERROR_VALUES = {"match_false", "match_true"}
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-BAD_ROUTER_PROMPT_RE = re.compile(
+BAD_PROMPT_RE = re.compile(
     r"reply with only the exact model name|only the model name|"
-    r"reply with only.{0,20}model name", re.I)
+    r"reply with only.{0,20}model name|"
+    r"reply with (exactly )?one label|"
+    r"reply with only.{0,20}label|"
+    r"output only.{0,20}label|"
+    r"respond with only.{0,20}label", re.I)
+# Keep the old name as an alias so existing code that references it still works
+BAD_ROUTER_PROMPT_RE = BAD_PROMPT_RE
+
+# Nested unbounded quantifiers rejected by std::regex (ECMAScript) as ReDoS safeguard.
+# Python re compiles these fine, so we catch them with a simple structural check.
+_REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)[+*]|[+*]\{[^}]*\}[+*]")
 
 
 def _err(issues, check, message, path=""):
@@ -112,6 +122,10 @@ def validate_match_expr(expr, classifiers, path, issues, depth=0):
                 _warn(issues, "regex_dialect",
                       f"pattern does not compile as Python re ({e}); server uses ECMAScript "
                       "regex, dialects differ slightly - verify manually", path)
+            if _REDOS_RE.search(v):
+                _err(issues, "regex_redos",
+                     "pattern contains nested unbounded quantifiers (e.g. (X+)+) which the "
+                     "server rejects at load time as a ReDoS safeguard", path)
 
     for key in ("min_chars", "max_chars"):
         if key in expr:
@@ -299,6 +313,14 @@ def validate(policy):
                 prompt = clf.get("prompt")
                 if not isinstance(prompt, str) or not prompt.strip():
                     _err(issues, "llm_classifier", "requires a non-empty 'prompt'", p)
+                elif BAD_PROMPT_RE.search(prompt):
+                    _warn(issues, "llm_classifier_prompt_contract",
+                          "prompt tells the model to reply with a bare label, but the engine "
+                          "appends its own JSON {model, rationale} contract and the classifier "
+                          "scores the chosen label 1.0 — an authored reply-format instruction "
+                          "causes weaker models to output a bare string the parser rejects, "
+                          "making the rule silently never fire. Describe classification intent "
+                          "only; do not instruct the model how to format its reply.", p)
                 if not isinstance(labels, list) or not labels or not all(isinstance(x, str) and x for x in labels):
                     _err(issues, "llm_classifier", "requires a non-empty 'labels' array", p)
             elif ctype == "semantic_similarity":

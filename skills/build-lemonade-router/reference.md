@@ -68,6 +68,15 @@ Notes:
 - A label-less `classifier` entry is legal (single-score models); its rule
   leaves then must not name a `label`.
 - Scores are `{label: score}` with each score in `[0, 1]`.
+- **`llm` classifier wire contract** - the engine appends its own JSON reply
+  contract after every `llm` classifier prompt, exactly as it does for
+  `routing.router`. The model must reply `{"model": "<chosen_label>",
+  "rationale": "<one sentence>"}`. The engine then scores the chosen label
+  `1.0` and all other labels `0.0`. **Never tell the model how to format its
+  reply** - an authored instruction like "Reply with exactly one label: X or Y"
+  causes weaker models to output bare `X`, the parser rejects it, the score
+  comes back empty, and the rule silently never fires. Describe classification
+  intent only (what makes a request COMPLEX vs SIMPLE, SAFE vs RISKY, etc.).
 
 ## Rules and match expressions
 
@@ -98,7 +107,7 @@ Match-expression grammar:
 | `classifier` | classifier id (string) | band test on that classifier's score |
 | `label` | string | only with `classifier`; must exist on that classifier; may be omitted only if the classifier has `default_label` |
 | `min_score` / `max_score` | number in [0,1], min ≤ max | only with `classifier`; omitting both defaults to `min_score: 0.5` |
-| `metadata` | `{ "key": <string>, ... }` | plus exactly one of `equals` (string), `any` (non-empty string array), `exists` (boolean); evaluated over the request's OpenAI `metadata` object |
+| `metadata` | `{ "key": <string>, ... }` | plus exactly one of `equals` (string), `any` (non-empty string array), `exists` (boolean); evaluated over the request's OpenAI `metadata` object. Comparisons are case-sensitive. `any` comma-decodes the metadata value before matching: a caller sending `{"dept": "legal,compliance"}` (scalar) matches `any: ["legal", "compliance"]` - same as if two separate values were in the array. |
 
 The routed input text is the last user message (chat), the `prompt`
 (completions), or the `input` (responses).
@@ -145,12 +154,14 @@ authoring judgment and aren't (fully) checkable by a script.
 11. `model_name` isn't a name already used earlier in this conversation
     (`/pull` is idempotent per `model_name` - a collision silently overwrites
     the earlier registration, not an error).
-12. A `routing.router.prompt` describes intent only - it never tells the
-    model how to format its reply. The engine appends its own JSON
-    `{model, rationale}` contract unconditionally; an authored instruction
-    like "reply with only the model name" contradicts it and, with a weaker
-    judge model, can cause silent fall-through to `default_model` on every
-    request.
+12. Every `llm` prompt (both `routing.router.prompt` and `type: "llm"`
+    classifier `prompt`) describes intent only - it never tells the model how
+    to format its reply. The engine appends its own JSON `{model, rationale}`
+    contract unconditionally to both. An authored instruction like "reply with
+    only the model name" or "reply with exactly one label: X or Y" contradicts
+    it: a weaker model obeys the authored line, outputs a bare string, the
+    parser rejects it, and the router silently falls through to `default_model`
+    on every request with no visible error.
 
 ## Registering, invoking, tracing
 
@@ -172,10 +183,12 @@ curl -X POST http://localhost:13305/api/v1/delete \
 
 Every routed response carries the `x-lemonade-route` header (matched rule id
 or `default`). With `"route_trace": true` the body also carries
-`x_lemonade_route`: `{ route_to, matched_rule, default_used, outputs,
-trace[] }` - use it to demonstrate each rule to the user. Registration errors
-come back as descriptive parser messages (e.g. `routing.default_model 'X'
-must be listed in routing.candidates`); fix the field it names and re-POST.
+`x_lemonade_route`: `{ version, route_to, matched_rule, default_used, outputs,
+trace[] }` - use it to demonstrate each rule to the user. `version` is always
+`"1"`. `trace[]` entries include `score` for classifier conditions and omit it
+for keyword/metadata conditions. Registration errors come back as descriptive
+parser messages (e.g. `routing.default_model 'X' must be listed in
+routing.candidates`); fix the field it names and re-POST.
 
 ## Desktop-editor compatibility
 
