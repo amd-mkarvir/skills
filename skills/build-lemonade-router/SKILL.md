@@ -207,10 +207,11 @@ JSON and re-run - don't present JSON that fails this check. It is pure
 offline structural/numeric validation; it cannot verify a named model
 actually exists or has the right capability (chat/embedding/classification).
 
-**Do not call the live server yourself.** Always end your response with
-the validated JSON in a fenced block followed by these three curl commands
-(fill in `<model-id>` and `<model_name>` from the policy, and a short
-`<test prompt>` that should hit the first rule). These are required output —
+**Do not call the live server yourself — not even to check models or
+register the policy.** Print the following curl commands as text for the
+user to copy and run; do not execute them with Bash or any tool. Fill in
+`<model-id>` and `<model_name>` from the policy and a short `<test prompt>`
+that should hit the first rule. These commands are required output —
 do not omit them even if the user did not ask:
 
 ```bash
