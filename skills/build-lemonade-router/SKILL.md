@@ -187,7 +187,7 @@ condition per leaf object; nesting is allowed:
 `router.model` (Mode A). Deduplicate, keep order stable. The parser rejects
 any referenced model that is not declared here.
 
-## Step 8 - Validate and output
+## Step 8 - Validate
 
 Write the JSON to a file, then **run the bundled offline validator** before
 presenting anything to the user - it mechanically re-checks every rule in
@@ -207,12 +207,15 @@ JSON and re-run - don't present JSON that fails this check. It is pure
 offline structural/numeric validation; it cannot verify a named model
 actually exists or has the right capability (chat/embedding/classification).
 
-**Do not call the live server yourself — not even to check models or
-register the policy.** Print the following curl commands as text for the
-user to copy and run; do not execute them with Bash or any tool. Fill in
-`<model-id>` and `<model_name>` from the policy and a short `<test prompt>`
-that should hit the first rule. These commands are required output —
-do not omit them even if the user did not ask:
+## Step 9 - Output curl commands
+
+**This step is mandatory — do not skip it even if the user did not ask.**
+
+Do not call the live server yourself — not even to check models or register
+the policy. Instead, print the three curl commands below as plain text for
+the user to copy and run. Fill in `<model-id>` and `<model_name>` from the
+policy, and a short `<test prompt>` that should hit the first rule. Do not
+execute these commands with Bash or any other tool.
 
 ```bash
 # 1. Check a model exists before registering
@@ -250,4 +253,4 @@ trace[] }` - useful for verifying each rule fires as expected.
 
 Worked NL → JSON pairs live in `examples.md`; the full schema, parser error
 matrix, and model-capability table live in `reference.md`; the offline
-validator is `scripts/validate.py` (run it - see Step 8).
+validator is `scripts/validate.py` (run it - see Steps 8–9).
