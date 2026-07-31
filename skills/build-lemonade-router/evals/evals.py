@@ -40,7 +40,7 @@ def test_keyword_router_generation():
             run.should("Output curl commands for the user to register and test the policy")
 
             # Negative behavioral expectations
-            run.should_not("Execute POST /api/v1/pull itself using a tool or API call — printing curl commands as text for the user is expected and correct")
+            run.should_not("Execute POST /api/v1/pull by making an actual HTTP call with a tool")
             run.should_not("Invent model names not provided by the user")
             run.should_not("Include both router and rules keys in the same policy")
 
@@ -64,7 +64,7 @@ def test_pii_regex_router_generation():
             run.should("Place the PII rule before any other rules")
             run.should("Run the offline validator and confirm the JSON is ready")
 
-            run.should_not("Execute any live Lemonade server API call itself using a tool — printing curl commands as text for the user is expected and correct")
+            run.should_not("Execute any live Lemonade server API call by making an actual HTTP call with a tool")
             run.should_not("Use routing.router instead of routing.rules for this request")
 
 

@@ -38,7 +38,7 @@ CLASSIFIER_TYPES = {"classifier", "semantic_similarity", "llm"}
 ON_ERROR_VALUES = {"match_false", "match_true"}
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
-ROOT_KEYS = {"version", "model_name", "recipe", "components", "routing"}
+ROOT_KEYS = {"version", "model_name", "recipe", "components", "models", "routing"}
 ROUTING_KEYS = {"candidates", "default_model", "router", "rules", "classifiers"}
 CLASSIFIER_KEYS = {"id", "type", "model", "labels", "default_label", "on_error",
                    "prompt", "reference_phrases"}
@@ -57,43 +57,57 @@ BAD_ROUTER_PROMPT_RE = BAD_PROMPT_RE
 _REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)[+*]|[+*]\{[^}]*\}[+*]")
 
 
-_PYTHON_ONLY_RE = re.compile(
-    r"\(\?P[<']"           # named group (?P<name> or (?P'name'
-    r"|\(\?P=[^)]*\)"      # backreference (?P=name)
-    r"|\(\?#[^)]*\)"       # comment (?#...)
-    r"|\(\?<![^)]*\)"      # lookbehind (?<!...) — not ECMAScript until ES2018, rejected by std::regex
-    r"|\(\?<=[^)]*\)"      # lookbehind (?<=...) — same
+# Constructs accepted by Node/V8 (ES2018+) but rejected by std::regex ECMAScript
+# (the C++ engine the server uses, which implements ~ES5.1).
+# This scan runs before Node so that Node's newer engine can't give a false pass.
+_STDREGEX_UNSUPPORTED_RE = re.compile(
+    r"\(\?P[<']"           # Python named group (?P<name> / (?P'name' — not ECMAScript at all
+    r"|\(\?P=[^)]*\)"      # Python backreference (?P=name)
+    r"|\(\?#[^)]*\)"       # Python comment (?#...)
+    r"|\(\?<=[^)]*\)"      # lookbehind (?<=...) — ES2018, not in std::regex
+    r"|\(\?<![^)]*\)"      # negative lookbehind (?<!...) — ES2018, not in std::regex
+    r"|\(\?<[A-Za-z_]"     # ECMAScript named group (?<name>...) — ES2018, not in std::regex
+    r"|\\[pP]\{"           # Unicode property escape \p{...} / \P{...} — ES2018, not in std::regex
 )
+# Keep the old name so any external code that references it doesn't break.
+_PYTHON_ONLY_RE = _STDREGEX_UNSUPPORTED_RE
 
 
 def _check_ecmascript_regex(pattern):
     """Return (error_str, skip_notice) for pattern against ECMAScript regex rules.
 
-    Uses Node.js (new RegExp) when available — the only authoritative check.
-    Falls back to Python re plus a dialect scan when Node is absent: rejects
-    Python-only syntax that ECMAScript does not support (named groups (?P<…>),
-    (?P=…) backreferences, (?#…) comments, lookbehinds) and flags patterns that
-    compile in Python re but whose validity in ECMAScript cannot be confirmed.
+    Always runs the dialect scan first: rejects constructs that are valid in
+    Python re (and may be accepted by Node v8+) but are not supported by
+    std::regex with the ECMAScript flag (the C++ engine the server uses).
+    Lookbehinds ((?<=...) / (?<!...)) are the canonical example — accepted by
+    Node since ES2018 but rejected by std::regex on all supported platforms.
+
+    Then uses Node.js (new RegExp) when available for a second-pass syntax
+    check. Falls back to Python re when Node is absent, with a warning.
     """
     import shutil
     import subprocess
+
+    # Dialect check runs unconditionally — before Node — because Node's engine
+    # (V8, ES2018+) accepts features that std::regex ECMAScript (~ES5.1) does not:
+    # lookbehinds, named groups (?<name>…), Unicode property escapes \p{…}, etc.
+    m = _STDREGEX_UNSUPPORTED_RE.search(pattern)
+    if m:
+        return (
+            f"regex construct '{m.group()}' is not supported by std::regex ECMAScript "
+            f"(the server's C++ engine, ~ES5.1); Node/V8 accepts this but the server will reject it",
+            None,
+        )
+
     node = shutil.which("node") or shutil.which("nodejs")
     if not node:
-        # Check for Python-only constructs that ECMAScript rejects outright.
-        m = _PYTHON_ONLY_RE.search(pattern)
-        if m:
-            return (
-                f"Python-only regex syntax '{m.group()}' is not valid ECMAScript regex "
-                f"(hint: use (?<name>…) for named groups in ECMAScript)",
-                None,
-            )
-        # Try compiling with Python re as a best-effort syntax check.
+        # Best-effort syntax check via Python re.
         try:
             re.compile(pattern)
         except re.error as exc:
             return f"regex syntax error: {exc}", None
-        # Pattern passed Python re but could not be verified against ECMAScript.
         return None, "node/nodejs not found - ECMAScript regex validation skipped; install Node.js to enable"
+
     # Wrap in try/catch so Node exits 0 on valid, 1 with the SyntaxError message on invalid.
     script = (
         "try { new RegExp(" + json.dumps(pattern) + "); process.exit(0); } "
@@ -231,6 +245,9 @@ def validate_match_expr(expr, classifiers, path, issues, depth=0):
         if not isinstance(md, dict) or not isinstance(md.get("key"), str) or not md.get("key"):
             _err(issues, "metadata", "requires a non-empty string 'key'", path)
         else:
+            unknown_md = set(md.keys()) - {"key", "equals", "any", "exists"}
+            if unknown_md:
+                _err(issues, "metadata", f"unknown key(s): {', '.join(sorted(unknown_md))}", path)
             comparators = [c for c in ("equals", "any", "exists") if c in md]
             if len(comparators) != 1:
                 _err(issues, "metadata", "must have exactly one of equals/any/exists", path)
