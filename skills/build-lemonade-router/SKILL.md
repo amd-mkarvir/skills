@@ -207,8 +207,11 @@ JSON and re-run - don't present JSON that fails this check. It is pure
 offline structural/numeric validation; it cannot verify a named model
 actually exists or has the right capability (chat/embedding/classification).
 
-**Do not call the live server.** The skill's job ends here. Output the JSON
-in a fenced block, then give the user these commands to run themselves:
+**Do not call the live server yourself.** Always end your response with
+the validated JSON in a fenced block followed by these three curl commands
+(fill in `<model-id>` and `<model_name>` from the policy, and a short
+`<test prompt>` that should hit the first rule). These are required output —
+do not omit them even if the user did not ask:
 
 ```bash
 # 1. Check a model exists before registering
