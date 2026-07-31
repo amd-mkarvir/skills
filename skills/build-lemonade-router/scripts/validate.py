@@ -37,6 +37,11 @@ LOGICAL_KEYS = {"all", "any", "not"}
 CLASSIFIER_TYPES = {"classifier", "semantic_similarity", "llm"}
 ON_ERROR_VALUES = {"match_false", "match_true"}
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+ROOT_KEYS = {"version", "model_name", "recipe", "components", "routing"}
+ROUTING_KEYS = {"candidates", "default_model", "router", "rules", "classifiers"}
+CLASSIFIER_KEYS = {"id", "type", "model", "labels", "default_label", "on_error",
+                   "prompt", "reference_phrases"}
 BAD_PROMPT_RE = re.compile(
     r"reply with only the exact model name|only the model name|"
     r"reply with only.{0,20}model name|"
@@ -50,6 +55,54 @@ BAD_ROUTER_PROMPT_RE = BAD_PROMPT_RE
 # Nested unbounded quantifiers rejected by std::regex (ECMAScript) as ReDoS safeguard.
 # Python re compiles these fine, so we catch them with a simple structural check.
 _REDOS_RE = re.compile(r"\([^)]*[+*][^)]*\)[+*]|[+*]\{[^}]*\}[+*]")
+
+
+_PYTHON_ONLY_RE = re.compile(
+    r"\(\?P[<']"           # named group (?P<name> or (?P'name'
+    r"|\(\?P=[^)]*\)"      # backreference (?P=name)
+    r"|\(\?#[^)]*\)"       # comment (?#...)
+    r"|\(\?<![^)]*\)"      # lookbehind (?<!...) — not ECMAScript until ES2018, rejected by std::regex
+    r"|\(\?<=[^)]*\)"      # lookbehind (?<=...) — same
+)
+
+
+def _check_ecmascript_regex(pattern):
+    """Return (error_str, skip_notice) for pattern against ECMAScript regex rules.
+
+    Uses Node.js (new RegExp) when available — the only authoritative check.
+    Falls back to Python re plus a dialect scan when Node is absent: rejects
+    Python-only syntax that ECMAScript does not support (named groups (?P<…>),
+    (?P=…) backreferences, (?#…) comments, lookbehinds) and flags patterns that
+    compile in Python re but whose validity in ECMAScript cannot be confirmed.
+    """
+    import shutil
+    import subprocess
+    node = shutil.which("node") or shutil.which("nodejs")
+    if not node:
+        # Check for Python-only constructs that ECMAScript rejects outright.
+        m = _PYTHON_ONLY_RE.search(pattern)
+        if m:
+            return (
+                f"Python-only regex syntax '{m.group()}' is not valid ECMAScript regex "
+                f"(hint: use (?<name>…) for named groups in ECMAScript)",
+                None,
+            )
+        # Try compiling with Python re as a best-effort syntax check.
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            return f"regex syntax error: {exc}", None
+        # Pattern passed Python re but could not be verified against ECMAScript.
+        return None, "node/nodejs not found - ECMAScript regex validation skipped; install Node.js to enable"
+    # Wrap in try/catch so Node exits 0 on valid, 1 with the SyntaxError message on invalid.
+    script = (
+        "try { new RegExp(" + json.dumps(pattern) + "); process.exit(0); } "
+        "catch(e) { process.stdout.write(e.message); process.exit(1); }"
+    )
+    result = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=5)
+    if result.returncode != 0:
+        return result.stdout.strip() or "invalid ECMAScript regex", None
+    return None, None
 
 
 def _err(issues, check, message, path=""):
@@ -116,12 +169,12 @@ def validate_match_expr(expr, classifiers, path, issues, depth=0):
         if not isinstance(v, str) or not v:
             _err(issues, "regex", "'regex' must be a non-empty string", path)
         else:
-            try:
-                re.compile(v)
-            except re.error as e:
-                _warn(issues, "regex_dialect",
-                      f"pattern does not compile as Python re ({e}); server uses ECMAScript "
-                      "regex, dialects differ slightly - verify manually", path)
+            ecma_err, ecma_skip = _check_ecmascript_regex(v)
+            if ecma_err:
+                _err(issues, "regex_dialect",
+                     f"invalid ECMAScript regex: {ecma_err}", path)
+            elif ecma_skip:
+                _warn(issues, "regex_dialect", ecma_skip, path)
             if _REDOS_RE.search(v):
                 _err(issues, "regex_redos",
                      "pattern contains nested unbounded quantifiers (e.g. (X+)+) which the "
@@ -201,6 +254,10 @@ def validate(policy):
         _err(issues, "root", "policy must be a JSON object")
         return issues
 
+    unknown_root = set(policy.keys()) - ROOT_KEYS
+    if unknown_root:
+        _err(issues, "unknown_key", f"unknown root key(s): {', '.join(sorted(unknown_root))}")
+
     if policy.get("version") != "1":
         _err(issues, "version", f"must be the string \"1\", got {policy.get('version')!r}")
 
@@ -226,6 +283,10 @@ def validate(policy):
     if not isinstance(routing, dict):
         _err(issues, "routing", "must be an object")
         return issues
+
+    unknown_routing = set(routing.keys()) - ROUTING_KEYS
+    if unknown_routing:
+        _err(issues, "unknown_key", f"unknown routing key(s): {', '.join(sorted(unknown_routing))}")
 
     candidates = routing.get("candidates")
     if not isinstance(candidates, list) or not candidates or not all(isinstance(c, str) and c for c in candidates):
@@ -285,6 +346,10 @@ def validate(policy):
             if not isinstance(clf, dict):
                 _err(issues, "classifier", "must be an object", p)
                 continue
+            unknown_clf = set(clf.keys()) - CLASSIFIER_KEYS
+            if unknown_clf:
+                _err(issues, "unknown_key", f"unknown key(s): {', '.join(sorted(unknown_clf))}", p)
+
             cid = clf.get("id")
             if not isinstance(cid, str) or not cid:
                 _err(issues, "classifier_id", "must be a non-empty string", p)
