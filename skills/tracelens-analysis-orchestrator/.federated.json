@@ -2,8 +2,8 @@
   "source": "amd-agi-tracelens",
   "repo": "AMD-AGI/TraceLens",
   "ref": "feat/gw_install_tl_from_agent",
-  "commit": "fb64288b1d0a0337034c99b63547372574639426",
+  "commit": "2d3cbd388af8998b3296648195cc21f659c12ec5",
   "path": "TraceLens/Agent/Analysis/skills/analysis-orchestrator",
   "license": "MIT",
-  "imported_at": "2026-08-03T16:46:25Z"
+  "imported_at": "2026-08-03T18:15:23Z"
 }
