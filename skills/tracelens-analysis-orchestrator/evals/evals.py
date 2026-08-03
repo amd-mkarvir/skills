@@ -130,8 +130,10 @@ def _extract_unit_tests(tracelens_dir: Path) -> None:
     if marker.is_dir():
         return
 
+    # Archive members are rooted at agent_evals/Analysis/analysis_tests/...
+    # under the TraceLens repo, so extract at tracelens_dir (not target_root).
     with tarfile.open(archive, "r:gz") as tar:
-        tar.extractall(path=target_root)
+        tar.extractall(path=tracelens_dir)
 
 
 def _load_first_repeatability_case(tracelens_dir: Path) -> RepeatabilityCase:
