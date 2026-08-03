@@ -77,8 +77,10 @@ MARKER_FILENAME = ".federated.json"
 SKILLS_PATH_PREFIX = "./skills/"
 CARD_FILENAME = "skill-card.md"
 
+# Skip leading whitespace and HTML comments before the YAML frontmatter block.
+LEADING_SKIP_RE = re.compile(r"\A(?:\s|<!--.*?-->)*", re.DOTALL)
 FRONTMATTER_RE = re.compile(
-    r"\A---\s*\n(?P<frontmatter>.*?)\n---\s*\n?(?P<body>.*)\Z",
+    r"---\s*\n(?P<frontmatter>.*?)\n---\s*\n?(?P<body>.*)\Z",
     re.DOTALL,
 )
 # The `name:` line inside a SKILL.md frontmatter block. Used to rewrite the
@@ -327,8 +329,14 @@ def rewrite_external_references(
                 log.append(f"    [{rel}] {old} -> {new}")
 
 
+def match_frontmatter(text: str) -> re.Match[str] | None:
+    skip = LEADING_SKIP_RE.match(text)
+    pos = skip.end() if skip else 0
+    return FRONTMATTER_RE.match(text, pos)
+
+
 def parse_frontmatter(text: str) -> dict:
-    match = FRONTMATTER_RE.match(text)
+    match = match_frontmatter(text)
     if not match:
         return {}
     try:
@@ -433,7 +441,7 @@ def rewrite_skill_name(skill_dir: Path, new_name: str, log: list[str]) -> None:
     """
     skill_md = skill_dir / "SKILL.md"
     text = skill_md.read_text(encoding="utf-8")
-    match = FRONTMATTER_RE.match(text)
+    match = match_frontmatter(text)
     if not match:
         return
     fm_start, fm_end = match.span("frontmatter")
