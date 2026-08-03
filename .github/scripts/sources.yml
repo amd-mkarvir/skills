@@ -40,7 +40,7 @@ sources:
         as: magpie-kernel-evaluator
   - name: amd-agi-tracelens
     repo: AMD-AGI/TraceLens
-    ref: main
+    ref: feat/gw_install_tl_from_agent
     path: TraceLens/Agent/Analysis/skills
     license: MIT
     skills:
