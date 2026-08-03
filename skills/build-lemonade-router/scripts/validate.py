@@ -283,10 +283,15 @@ def validate(policy):
             not SAFE_ID_RE.match(model_name[len("user."):] or ""):
         _err(issues, "model_name", "must be a non-empty string starting with 'user.' using [A-Za-z0-9._-]")
     elif model_name == "user.MyHybridRouter":
+        # Checks only the literal scaffold default — derived names like
+        # user.Qwen3.5-2B-GGUF-Router can also collide across sessions, but
+        # this offline validator sees one policy at a time and has no session
+        # history to compare against. The collision risk is documented in
+        # SKILL.md Step 2; enforcement requires the live server's /pull response.
         _warn(issues, "model_name",
-              "using the bare default name - if you register more than one router in this "
-              "session without renaming, later /pull calls will silently overwrite earlier "
-              "ones (model_name is the collection identity). Give it a distinct name.")
+              "using the bare scaffold default name 'user.MyHybridRouter' - if you register "
+              "more than one router without renaming, later /pull calls will silently overwrite "
+              "earlier ones (model_name is the collection identity). Give it a distinct name.")
 
     if policy.get("recipe") != "collection.router":
         _err(issues, "recipe", f"must be \"collection.router\", got {policy.get('recipe')!r}")
@@ -323,6 +328,8 @@ def validate(policy):
         _err(issues, "mode", "routing must contain exactly one of 'router' or 'rules'")
     if has_router and has_classifiers:
         _err(issues, "mode", "'router' cannot be combined with 'classifiers'")
+    if has_classifiers and not has_rules:
+        _err(issues, "mode", "'classifiers' requires 'rules' (classifiers are referenced by rules)")
 
     needed_components = set(candidates)
     classifiers_by_id = {}
