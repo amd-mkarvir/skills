@@ -85,7 +85,7 @@ def test_llm_as_router_generation():
             run.should("Set type to llm inside the router block")
             run.should("Write a prompt that describes routing intent only, not reply format")
             run.should("Contain only routing.router with no routing.rules key present in router.json")
-            run.should_not("Tell the router model to reply with only the model name")
+            run.should("Write a routing.router prompt that describes only when to pick each model, with no instruction about reply format or output format")
 
 
 def test_non_trigger_general_question():
