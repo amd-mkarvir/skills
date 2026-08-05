@@ -196,37 +196,26 @@ condition per leaf object; nesting is allowed:
 `router.model` (Mode A). Deduplicate, keep order stable. The parser rejects
 any referenced model that is not declared here.
 
-## Step 8 - Validate
+## Step 8 - Validate and output curl commands
 
-Write the JSON to a file, then **run the bundled offline validator** before
-presenting anything to the user - it mechanically re-checks every rule in
-`reference.md`'s validation checklist (score ranges, non-negative integer
-char counts, mode exclusivity, label/classifier references, the `model_name`
-collision, the router-prompt-contract mistake above, etc.) so you don't have
-to re-derive them by eye every time:
+These two actions are a single mandatory step. Do not stop between them.
+
+**8a. Run the offline validator** before presenting anything to the user:
 
 ```bash
 python scripts/validate.py router.json    # Windows
 python3 scripts/validate.py router.json   # macOS/Linux
 ```
 
-It exits 0 with `"ready": true` when there are no errors (warnings/advisories
-may still be worth mentioning to the user). If it reports errors, fix the
-JSON and re-run - don't present JSON that fails this check. It is pure
-offline structural/numeric validation; it cannot verify a named model
-actually exists or has the right capability (chat/embedding/classification).
+It exits 0 with `"ready": true` when there are no errors. If it reports
+errors, fix the JSON and re-run. Do not present a policy that fails this
+check.
 
-## Step 9 - Output curl commands (mandatory — never skip)
-
-**Always output the curl commands below as the final step, even if the user
-did not ask for them. Do not stop after validation. Do not stop after writing
-the JSON. The response is not complete until the curl commands are printed.**
-
-Do not call the live server yourself — not even to check models or register
-the policy. Instead, print the three curl commands below as plain text for
-the user to copy and run. Fill in `<model-id>` and `<model_name>` from the
-policy, and a short `<test prompt>` that should hit the first rule. Do not
-execute these commands with Bash or any other tool.
+**8b. Immediately after validation passes, print these three curl commands**
+as plain text for the user to copy and run. This is not optional. Fill in
+`<model-id>` and `<model_name>` from the policy, and a short `<test prompt>`
+that should hit the first rule. Do not execute these with Bash or any tool —
+print them as text only.
 
 ```bash
 # 1. Check a model exists before registering
@@ -264,4 +253,4 @@ trace[] }` - useful for verifying each rule fires as expected.
 
 Worked NL → JSON pairs live in `examples.md`; the full schema, parser error
 matrix, and model-capability table live in `reference.md`; the offline
-validator is `scripts/validate.py` (run it - see Steps 8–9).
+validator is `scripts/validate.py` (run it - see Step 8).
