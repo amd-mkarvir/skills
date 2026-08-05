@@ -101,15 +101,20 @@ chat-capable LLMs - not embedding, classification, or image models.
 
 - `model` defaults to the smallest candidate (it may be a candidate; it also
   works as a separate small model).
-- **Write intent only - never specify a reply format.** The engine
-  unconditionally appends its own contract after your prompt: it lists the
-  candidate names and demands a strict JSON reply `{"model": "<name>",
-  "rationale": "<one sentence>"}`, then falls back to `default_model` on any
-  deviation. A prompt that also says "reply with ONLY the model name" (or
-  similar) is not just redundant, it's wrong about the wire format and can
-  confuse weaker judge models into replying with a bare string that then
-  fails to parse - silently falling back to `default_model` on every request,
-  with no visible error. Only describe *when to pick which candidate*.
+- **Write intent only - never specify a reply format and never use imperative
+  "Pick X" phrasing.** The engine unconditionally appends its own contract
+  after your prompt: it lists the candidate names and demands a strict JSON
+  reply `{"model": "<name>", "rationale": "<one sentence>"}`, then falls back
+  to `default_model` on any deviation. A prompt that says "reply with ONLY the
+  model name", "Pick Model-A", "respond with the model name", or similar is
+  wrong about the wire format and causes weaker judge models to reply with a
+  bare string that fails to parse - silently falling back to `default_model`
+  on every request with no visible error.
+
+  **Bad** (do not write): `"Pick Qwen3.5-9B-GGUF for sensitive queries, pick Qwen3.5-9B-NoThinking for everything else."`
+  **Good**: `"Route to Qwen3.5-9B-GGUF when the request appears sensitive or contains personal information. Route to Qwen3.5-9B-NoThinking for all other requests."`
+
+  Only describe *when* each candidate is appropriate. Never say "pick", "output", "reply with", or "respond with".
 - **NEVER emit `rules` or `classifiers` in this mode.** The `routing` object
   in Mode A must contain exactly: `candidates`, `default_model`, and `router`.
   Adding `rules` or `classifiers` alongside `router` is a schema violation
@@ -211,9 +216,11 @@ JSON and re-run - don't present JSON that fails this check. It is pure
 offline structural/numeric validation; it cannot verify a named model
 actually exists or has the right capability (chat/embedding/classification).
 
-## Step 9 - Output curl commands
+## Step 9 - Output curl commands (mandatory — never skip)
 
-**This step is mandatory — do not skip it even if the user did not ask.**
+**Always output the curl commands below as the final step, even if the user
+did not ask for them. Do not stop after validation. Do not stop after writing
+the JSON. The response is not complete until the curl commands are printed.**
 
 Do not call the live server yourself — not even to check models or register
 the policy. Instead, print the three curl commands below as plain text for

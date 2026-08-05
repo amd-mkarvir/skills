@@ -48,7 +48,10 @@ BAD_PROMPT_RE = re.compile(
     r"reply with (exactly )?one label|"
     r"reply with only.{0,20}label|"
     r"output only.{0,20}label|"
-    r"respond with only.{0,20}label", re.I)
+    r"respond with only.{0,20}label|"
+    r"^\s*pick\s+\S|"                  # "Pick <model>" imperative at start of prompt
+    r"respond with.{0,20}model name|"
+    r"output.{0,20}model name", re.I | re.MULTILINE)
 # Keep the old name as an alias so existing code that references it still works
 BAD_ROUTER_PROMPT_RE = BAD_PROMPT_RE
 
