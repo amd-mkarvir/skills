@@ -2,12 +2,12 @@
 #
 # See LICENSE for license information.
 
-"""Behavioral tests for the `build-lemonade-router` skill.
+"""Behavioral tests for the `lemonade-router-builder` skill.
 
 Run locally (needs the `claude` CLI authenticated):
 
     cd eval/behavioral
-    python -m pytest -c pytest.ini -p conftest ../../skills/build-lemonade-router/evals/evals.py
+    python -m pytest -c pytest.ini -p conftest ../../skills/lemonade-router-builder/evals/evals.py
 
 Each check on `run` prints a `[PASS]`/`[FAIL]` line and raises on failure.
 `logs_contains` / `workspace_contains` are deterministic; `should` /
@@ -21,7 +21,7 @@ def test_keyword_router_generation():
     """Trigger: user asks to route coding questions to a bigger model."""
     agent_configs = [(claude, "opus")]
     for agent, model in agent_configs:
-        with agent(model, skill="build-lemonade-router") as run:
+        with agent(model, skill="lemonade-router-builder") as run:
             run = run.prompt(
                 "Route coding questions - anything mentioning functions, bugs, "
                 "or stack traces - to Qwen3.5-9B-GGUF. Everything else goes to "
@@ -29,7 +29,7 @@ def test_keyword_router_generation():
             )
 
             # Deterministic: skill must produce a JSON file and validate it
-            run.logs_contains("build-lemonade-router")
+            run.logs_contains("lemonade-router-builder")
             run.workspace_contains("router.json")
 
             # Positive behavioral expectations
@@ -49,14 +49,14 @@ def test_pii_regex_router_generation():
     """Trigger: user asks to keep PII local using regex patterns."""
     agent_configs = [(claude, "opus")]
     for agent, model in agent_configs:
-        with agent(model, skill="build-lemonade-router") as run:
+        with agent(model, skill="lemonade-router-builder") as run:
             run = run.prompt(
                 "Any message with a Social Security number or email address must "
                 "stay on Qwen3.5-9B-GGUF. Everything else can go to "
                 "Qwen3.5-9B-NoThinking."
             )
 
-            run.logs_contains("build-lemonade-router")
+            run.logs_contains("lemonade-router-builder")
             run.workspace_contains("router.json")
 
             run.should("Include a regex condition matching SSN patterns")
@@ -72,13 +72,13 @@ def test_llm_as_router_generation():
     """Trigger: user describes intent only by meaning with no concrete signals."""
     agent_configs = [(claude, "opus")]
     for agent, model in agent_configs:
-        with agent(model, skill="build-lemonade-router") as run:
+        with agent(model, skill="lemonade-router-builder") as run:
             run = run.prompt(
                 "I want sensitive queries to go to Qwen3.5-9B-GGUF and everything "
                 "else to Qwen3.5-9B-NoThinking. Use the local model as the router."
             )
 
-            run.logs_contains("build-lemonade-router")
+            run.logs_contains("lemonade-router-builder")
             run.workspace_contains("router.json")
 
             run.should("Use routing.router block instead of routing.rules")
@@ -92,7 +92,7 @@ def test_non_trigger_general_question():
     """Non-trigger: general question unrelated to routing should not activate skill."""
     agent_configs = [(claude, "opus")]
     for agent, model in agent_configs:
-        with agent(model, skill="build-lemonade-router") as run:
+        with agent(model, skill="lemonade-router-builder") as run:
             run = run.prompt("What is the capital of France?")
 
             run.should_not("Produce a collection.router JSON")
@@ -104,7 +104,7 @@ def test_non_trigger_unrelated_code_task():
     """Non-trigger: coding task unrelated to Lemonade routing."""
     agent_configs = [(claude, "opus")]
     for agent, model in agent_configs:
-        with agent(model, skill="build-lemonade-router") as run:
+        with agent(model, skill="lemonade-router-builder") as run:
             run = run.prompt("Write a Python function to reverse a linked list.")
 
             run.should_not("Generate a collection.router policy")

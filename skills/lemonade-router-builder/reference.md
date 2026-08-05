@@ -1,6 +1,6 @@
 # Lemonade Router Config: Reference
 
-Detailed contract for the `build-lemonade-router` skill. Read this when the
+Detailed contract for the `lemonade-router-builder` skill. Read this when the
 generation steps in `SKILL.md` leave a question open. The server-side parser
 (`routing_policy_parser.cpp`) is strict: it rejects unknown keys at every
 level, so never emit fields not listed here.

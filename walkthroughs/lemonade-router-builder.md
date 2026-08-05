@@ -1,4 +1,4 @@
-# AMD Skills Walkthroughs: `build-lemonade-router`
+# AMD Skills Walkthroughs: `lemonade-router-builder`
 
 The goal of this skill is to teach your AI agent to turn a plain-English
 description of routing intent into a valid Lemonade `collection.router` policy
@@ -17,10 +17,10 @@ JSON, ready for you to register and use.
 claude "Which skills can you see?" --model sonnet
 ```
 
-You should see `build-lemonade-router` in the list. If not, install it:
+You should see `lemonade-router-builder` in the list. If not, install it:
 
 ```bash
-npx skills add amd/skills --skill build-lemonade-router --agent claude-code
+npx skills add amd/skills --skill lemonade-router-builder --agent claude-code
 ```
 
 ## Step 2 - Generate a simple keyword router

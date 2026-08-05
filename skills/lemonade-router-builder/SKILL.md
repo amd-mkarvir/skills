@@ -1,5 +1,5 @@
 ---
-name: build-lemonade-router
+name: lemonade-router-builder
 description: >-
   Turns a natural-language description of routing intent into a valid Lemonade
   `collection.router` policy JSON. The skill generates and validates the JSON
