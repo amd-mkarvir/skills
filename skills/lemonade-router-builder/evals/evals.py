@@ -65,7 +65,7 @@ def test_pii_regex_router_generation():
             run.should("Run the offline validator and confirm the JSON is ready")
 
             run.should_not("Execute any live Lemonade server API call by making an actual HTTP call with a tool")
-            run.should_not("Use routing.router instead of routing.rules for this request")
+            run.should("Use routing.rules (not routing.router) to implement this request")
 
 
 def test_llm_as_router_generation():
@@ -84,7 +84,7 @@ def test_llm_as_router_generation():
             run.should("Use routing.router block instead of routing.rules")
             run.should("Set type to llm inside the router block")
             run.should("Write a prompt that describes routing intent only, not reply format")
-            run.should_not("Include a routing.rules key anywhere in router.json alongside routing.router")
+            run.should("Contain only routing.router with no routing.rules key present in router.json")
             run.should_not("Tell the router model to reply with only the model name")
 
 
