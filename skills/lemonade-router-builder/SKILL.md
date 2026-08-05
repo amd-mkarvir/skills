@@ -110,7 +110,11 @@ chat-capable LLMs - not embedding, classification, or image models.
   confuse weaker judge models into replying with a bare string that then
   fails to parse - silently falling back to `default_model` on every request,
   with no visible error. Only describe *when to pick which candidate*.
-- Emit **no** `rules` and **no** `classifiers` key in this mode.
+- **NEVER emit `rules` or `classifiers` in this mode.** The `routing` object
+  in Mode A must contain exactly: `candidates`, `default_model`, and `router`.
+  Adding `rules` or `classifiers` alongside `router` is a schema violation
+  that the server parser rejects. If you catch yourself writing both, stop and
+  remove `rules`/`classifiers` entirely.
 
 ## Step 5 - Mode B: classifiers
 

@@ -42,7 +42,7 @@ def test_keyword_router_generation():
             # Negative behavioral expectations
             run.should_not("Execute POST /api/v1/pull by making an actual HTTP call with a tool")
             run.should_not("Invent model names not provided by the user")
-            run.should_not("Include both router and rules keys in the same policy")
+            run.should_not("Include a routing.router key anywhere in router.json alongside routing.rules")
 
 
 def test_pii_regex_router_generation():
@@ -84,7 +84,7 @@ def test_llm_as_router_generation():
             run.should("Use routing.router block instead of routing.rules")
             run.should("Set type to llm inside the router block")
             run.should("Write a prompt that describes routing intent only, not reply format")
-            run.should_not("Include both routing.router and routing.rules in the output")
+            run.should_not("Include a routing.rules key anywhere in router.json alongside routing.router")
             run.should_not("Tell the router model to reply with only the model name")
 
 
