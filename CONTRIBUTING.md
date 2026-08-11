@@ -229,6 +229,41 @@ python -m pytest -c pytest.ini -p conftest ../../skills/local-ai-use/evals/evals
 In CI, the `behavioral` workflow runs the affected skill's tests when a PR
 changes a skill with an `evals/evals.py` file.
 
+### Choosing a runner pool
+
+By default a skill's test runs on the self-hosted Strix Halo runners, on Linux
+and Windows. A skill that needs different hardware is assigned to a *runner
+pool* in [`.github/scripts/runner_pools.json`](.github/scripts/runner_pools.json):
+
+```json
+"skills": {
+  "serving-llms-on-instinct": "instinct"
+}
+```
+
+That one file is the whole audit trail for who runs where, so keep it as the
+only place the assignment lives. A pool is more than a machine — the `instinct`
+pool is scarce MI300X hardware *and* its job reads an Anthropic key from an
+environment the default pool cannot see, so adding a skill there grants it
+both. Expect that line to get more review scrutiny than the skill itself.
+
+Pools whose hardware is scarce declare an `opt_in_label`. Touching one of their
+skills is not enough to run the test: the PR also needs that label
+(`enable_mi_ci` for `instinct`). Without it the job is skipped and the gate
+passes with a warning, so the change can merge having never run on the
+hardware — apply the label before merging anything non-trivial. A manual
+`workflow_dispatch` run needs no label.
+
+Each pool is implemented by one job in `behavioral.yml`, where its runner
+labels and secrets live, because Actions cannot create jobs dynamically.
+Adding a skill to an existing pool is a registry-only change; adding a new
+pool means a new job. Check your edit with:
+
+```bash
+uv run .github/scripts/select_behavioral.py --check
+uv run .github/scripts/select_behavioral.py --all --plan
+```
+
 ## Pre-publish checklist
 
 - [ ] Description states the user's goal and includes likely trigger phrases

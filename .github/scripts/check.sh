@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Validate every SKILL.md and that generated plugin manifests are up to date.
+# Validate every SKILL.md, the behavioral runner pool registry, and that
+# generated plugin manifests are up to date.
 #
 # Usage:
 #   ./.github/scripts/check.sh              Validate every skill and check manifests.
@@ -19,6 +20,7 @@ usage() {
 case "${1:-}" in
   "")
     uv run .github/scripts/validate_skills.py
+    uv run .github/scripts/select_behavioral.py --check
     uv run .github/scripts/generate_cursor_marketplace.py --check
     uv run .github/scripts/generate_codex_plugin.py --check
     ;;

@@ -1,0 +1,20 @@
+{
+  "default_pool": "strix_halo",
+  "pools": {
+    "strix_halo": {
+      "description": "Self-hosted Strix Halo runners. The default pool: every skill that is not listed in `skills` below runs here, on both Linux and Windows.",
+      "os": ["Linux", "Windows"],
+      "opt_in_label": null,
+      "job": "behavioral"
+    },
+    "instinct": {
+      "description": "Self-hosted MI300X runners (Linux, ROCm, Docker). Scarce shared hardware, and the job reads an Anthropic key from the `behavioral-instinct` environment rather than the internal AMD gateway, so assigning a skill here grants it both.",
+      "os": ["Linux"],
+      "opt_in_label": "enable_mi_ci",
+      "job": "behavioral-instinct"
+    }
+  },
+  "skills": {
+    "serving-llms-on-instinct": "instinct"
+  }
+}
