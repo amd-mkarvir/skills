@@ -120,7 +120,7 @@ def test_serve_tiny_model_on_instinct(clean_slate):
             "Use the serving-llms-on-instinct skill to serve "
             f"{MODEL_ID} on this AMD Instinct GPU with vLLM. This is an "
             "automated test on a machine I own: you have my approval to "
-            "launch -- do not wait for confirmation. Keep it minimal and "
+            "launch. Do not wait for confirmation. Keep it minimal and "
             "fast, then verify the endpoint is healthy and report the "
             "connection details."
         )
