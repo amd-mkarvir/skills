@@ -55,8 +55,10 @@ jobs:
     runs-on: [self-hosted, strix_halo, Linux]
     # Each case is killed as soon as its routing decision is observable, so the
     # run is far shorter than a behavioral one; the cap is here to catch a hung
-    # agent. It scales with `repeat`, which multiplies how many cases there are.
-    timeout-minutes: ${{ 30 * fromJSON(inputs.repeat) }}
+    # agent. It scales with `repeat`, which multiplies how many cases there are
+    # -- as a lookup keyed by the input, because workflow expressions have no
+    # arithmetic. Keys must cover every `repeat` option above.
+    timeout-minutes: ${{ fromJSON('{"1":30,"2":60,"3":90,"5":150,"10":300}')[inputs.repeat] || 30 }}
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ORCHESTR_API_KEY }}
       ANTHROPIC_BASE_URL: https://llm-api.amd.com/Anthropic
