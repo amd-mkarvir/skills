@@ -3,9 +3,8 @@ name: routing
 # Routing eval: install every skill published in
 # .claude-plugin/marketplace.json at once and check that each prompt in
 # eval/routing/prompts.json activates the skill it should -- and that the
-# prompts which should activate nothing don't. Reports statistics (accuracy,
-# per-skill recall/precision, a confusion matrix) to the job summary; see
-# eval/routing/routing_eval.py.
+# prompts which should activate nothing don't. Reports aggregate verdicts and
+# failed cases to the job summary; see eval/routing/routing_eval.py.
 #
 # Where a behavioral test (behavioral.yml, eval/behavioral/) asks "once this
 # skill runs, does it work?", this asks the question that comes first: "with the
