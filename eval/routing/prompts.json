@@ -48,73 +48,73 @@
     {
       "id": "electron-offline-mode",
       "category": "positive",
-      "expect": "local-ai-app-integration",
+      "expect": "local-ai-use",
       "prompt": "My Electron app calls the OpenAI chat completions endpoint. I want to ship an offline mode that bundles the inference engine into the installer so it still works with no internet."
     },
     {
       "id": "swap-anthropic-backend",
       "category": "positive",
-      "expect": "local-ai-app-integration",
+      "expect": "local-ai-use",
       "prompt": "My Python desktop tool talks to the Anthropic Messages API today. Give it a mode where the model runs on the customer's own PC so their data never leaves the machine."
     },
     {
       "id": "vendor-binary",
       "category": "positive",
-      "expect": "local-ai-app-integration",
+      "expect": "local-ai-use",
       "prompt": "Can you vendor an inference binary into my app and repoint my existing HTTP client at it instead of the Ollama server I'm hitting now?"
     },
     {
       "id": "in-app-embeddings",
       "category": "positive",
-      "expect": "local-ai-app-integration",
+      "expect": "local-ai-use",
       "prompt": "I want my app to compute embeddings on the end user's hardware rather than calling a hosted embeddings API. How do I wire that up?"
     },
     {
       "id": "qwen-on-mi300x",
       "category": "positive",
-      "expect": "serving-llms-on-instinct",
+      "expect": "local-ai-use",
       "prompt": "Get Qwen3 serving on my MI300X box."
     },
     {
       "id": "vllm-rocm-node",
       "category": "positive",
-      "expect": "serving-llms-on-instinct",
+      "expect": "local-ai-use",
       "prompt": "I have an 8-GPU AMD Instinct node with ROCm installed. Spin up a vLLM endpoint for DeepSeek and confirm it's actually healthy before you hand it back to me."
     },
     {
       "id": "openai-compatible-mi355x",
       "category": "positive",
-      "expect": "serving-llms-on-instinct",
+      "expect": "local-ai-use",
       "prompt": "How do I launch an OpenAI-compatible inference server on MI355X hardware?"
     },
     {
       "id": "deploy-datacenter-gpu",
       "category": "positive",
-      "expect": "serving-llms-on-instinct",
+      "expect": "local-ai-use",
       "prompt": "Deploy a language model on my AMD data center GPUs so my team can hit it over HTTP."
     },
     {
       "id": "analyze-torch-trace",
       "category": "positive",
-      "expect": "tracelens-analysis-orchestrator",
+      "expect": "local-ai-use",
       "prompt": "My training step is way slower than I expected. I ran it under the PyTorch profiler and the output is at https://github.com/AMD-AGI/TraceLens/raw/main/tests/traces/mi300/resnet_act_checkpoint.json.gz. Work out where the time is actually going and write it up so I know what to fix first."
     },
     {
       "id": "compare-two-traces",
       "category": "positive",
-      "expect": "tracelens-analysis-orchestrator",
+      "expect": "local-ai-use",
       "prompt": "I profiled the same model on two different machines and one is clearly slower, but I can't tell why. The captures are at https://github.com/AMD-AGI/TraceLens/raw/main/tests/traces/mi300/facebook_timesformer-base-finetuned-k400__1016002.json.gz and https://github.com/AMD-AGI/TraceLens/raw/main/tests/traces/h100/facebook_timesformer-base-finetuned-k400__1016002.json.gz. Tell me which GPU kernels are worse on the slow one, worst first, and write it up."
     },
     {
       "id": "agentic-analysis-workflow",
       "category": "positive",
-      "expect": "tracelens-analysis-orchestrator",
+      "expect": "local-ai-use",
       "prompt": "Run the agentic analysis workflow on the trace at https://github.com/AMD-AGI/TraceLens/raw/main/tests/traces/mi300/gaunernst_bert-small-uncased__1016001.json.gz and produce analysis.md."
     },
     {
       "id": "kernel-perf-report",
       "category": "positive",
-      "expect": "tracelens-analysis-orchestrator",
+      "expect": "local-ai-use",
       "prompt": "I captured a GPU kernel trace from a distributed training run: https://github.com/AMD-AGI/TraceLens/raw/main/tests/traces/mi300/llama_70b_fsdp/rank0_trace_no_pyfn.json.gz. I need a prioritized report of the worst performance offenders that I can show stakeholders."
     },
     {
