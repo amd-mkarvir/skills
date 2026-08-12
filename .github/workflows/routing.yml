@@ -33,6 +33,14 @@ on:
         description: "Fail the run when accuracy falls below this (0-1). 0 reports without gating."
         required: false
         default: "0"
+      repeat:
+        description: "How many times to run each prompt. >1 separates a prompt that always misroutes from a flaky one, and costs proportionally more."
+        required: false
+        default: "1"
+        # A dropdown rather than free text: the job timeout below is computed
+        # from this value, so it has to be a number.
+        type: choice
+        options: ["1", "2", "3", "5", "10"]
 
 concurrency:
   group: routing-${{ github.ref }}
@@ -47,8 +55,8 @@ jobs:
     runs-on: [self-hosted, strix_halo, Linux]
     # Each case is killed as soon as its routing decision is observable, so the
     # run is far shorter than a behavioral one; the cap is here to catch a hung
-    # agent.
-    timeout-minutes: 30
+    # agent. It scales with `repeat`, which multiplies how many cases there are.
+    timeout-minutes: ${{ 30 * fromJSON(inputs.repeat) }}
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ORCHESTR_API_KEY }}
       ANTHROPIC_BASE_URL: https://llm-api.amd.com/Anthropic
@@ -79,16 +87,23 @@ jobs:
       # as statistics instead of a red run; set `min_accuracy` on dispatch to
       # turn it into a hard bar. It still fails on infrastructure problems (no
       # case produced a decision, or no skill activated anywhere).
+      #
+      # `repeat` runs every prompt more than once. Routing is not
+      # deterministic, so a single run cannot tell "this description always
+      # loses to its neighbor" from "it lost once"; the report gains a
+      # stability table when this is above 1.
       - name: Run the skill-routing eval
         shell: bash
         env:
           ONLY: ${{ inputs.only }}
           MIN_ACCURACY: ${{ inputs.min_accuracy }}
+          REPEAT: ${{ inputs.repeat }}
         run: |
           set -euo pipefail
           python eval/routing/routing_eval.py \
             --only "$ONLY" \
             --min-accuracy "$MIN_ACCURACY" \
+            --repeat "$REPEAT" \
             --output routing-report.json \
             --keep-logs routing-logs
 

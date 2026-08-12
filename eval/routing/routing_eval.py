@@ -36,6 +36,9 @@ Usage::
     # one case, keeping the raw transcript for debugging
     python eval/routing/routing_eval.py --only qwen-on-mi300x --keep-logs
 
+    # every case three times, to tell a consistent misroute from a flaky one
+    python eval/routing/routing_eval.py --repeat 3
+
 Output is a JSON artifact (``--output``) plus a markdown report written to
 stdout and, under GitHub Actions, to ``$GITHUB_STEP_SUMMARY``.
 """
@@ -104,6 +107,9 @@ class Case:
 @dataclass
 class Outcome:
     id: str
+    # Which repetition of this prompt produced the outcome (1-based). Routing
+    # is not deterministic, so the same prompt can land differently run to run.
+    run: int
     category: str
     prompt: str
     expect: str | None
@@ -465,7 +471,7 @@ def _terminate(proc: subprocess.Popen) -> None:
         pass
 
 
-def run_case(case: Case, skills: list[str], args: argparse.Namespace) -> Outcome:
+def run_case(case: Case, skills: list[str], args: argparse.Namespace, run: int = 1) -> Outcome:
     """Run one prompt, stopping as soon as the routing decision is known."""
     claude_bin = shutil.which("claude")
     if not claude_bin:
@@ -601,7 +607,9 @@ def run_case(case: Case, skills: list[str], args: argparse.Namespace) -> Outcome
         if args.keep_logs:
             logs_dir = Path(args.keep_logs)
             logs_dir.mkdir(parents=True, exist_ok=True)
-            (logs_dir / f"{case.id}.jsonl").write_text(
+            # Repetitions of a prompt must not overwrite each other's transcript.
+            stem = case.id if getattr(args, "repeat", 1) == 1 else f"{case.id}-run{run}"
+            (logs_dir / f"{stem}.jsonl").write_text(
                 "\n".join(json.dumps(e, ensure_ascii=False) for e in events),
                 encoding="utf-8",
             )
@@ -631,6 +639,7 @@ def run_case(case: Case, skills: list[str], args: argparse.Namespace) -> Outcome
 
     outcome = Outcome(
         id=case.id,
+        run=run,
         category=case.category,
         prompt=case.prompt,
         expect=case.expect,
@@ -645,8 +654,9 @@ def run_case(case: Case, skills: list[str], args: argparse.Namespace) -> Outcome
         extra_skills=extra,
         error=error,
     )
+    label = case.id if getattr(args, "repeat", 1) == 1 else f"{case.id} (run {run})"
     print(
-        f"  [{'PASS' if outcome.passed else 'FAIL'}] {case.id}: "
+        f"  [{'PASS' if outcome.passed else 'FAIL'}] {label}: "
         f"expected {case.expect or 'no skill'} -> got {observed or 'no skill'} "
         f"({verdict}, {stop_reason}, {outcome.elapsed_s}s)",
         flush=True,
@@ -696,6 +706,29 @@ def summarize(outcomes: list[Outcome], skills: list[str], meta: dict) -> dict:
             "precision": round(correct / len(fired), 3) if fired else None,
         }
 
+    # With repeats, the prompt rather than the run is the interesting unit: a
+    # prompt that routes correctly two runs out of three is a different finding
+    # from one that fails every time, and the flat verdict counts hide that.
+    by_prompt: list[dict] = []
+    if meta.get("repeat", 1) > 1:
+        for case_id in dict.fromkeys(o.id for o in outcomes):
+            runs = [o for o in outcomes if o.id == case_id]
+            scored = [o for o in runs if o.verdict != "error"]
+            landed = Counter(o.observed or "(no skill)" for o in scored)
+            by_prompt.append(
+                {
+                    "id": case_id,
+                    "category": runs[0].category,
+                    "expect": runs[0].expect,
+                    "runs": len(runs),
+                    "graded": len(scored),
+                    "passed": sum(1 for o in scored if o.passed),
+                    "errors": len(runs) - len(scored),
+                    "observed": dict(landed.most_common()),
+                    "consistent": len(landed) <= 1,
+                }
+            )
+
     confusion: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for outcome in graded:
         confusion[outcome.expect or "(no skill)"][outcome.observed or "(no skill)"] += 1
@@ -717,7 +750,10 @@ def summarize(outcomes: list[Outcome], skills: list[str], meta: dict) -> dict:
     return {
         "meta": meta,
         "totals": {
+            # `cases` counts runs, which is more than `prompts` when a repeat
+            # count was asked for. Every rate below is per run.
             "cases": len(outcomes),
+            "prompts": len({o.id for o in outcomes}),
             "graded": len(graded),
             "passed": len(passed),
             "errors": verdicts.get("error", 0),
@@ -731,6 +767,7 @@ def summarize(outcomes: list[Outcome], skills: list[str], meta: dict) -> dict:
         },
         "verdicts": {name: verdicts.get(name, 0) for name in VERDICTS},
         "by_category": by_category,
+        "by_prompt": by_prompt,
         "per_skill": per_skill,
         "confusion": {k: dict(v) for k, v in confusion.items()},
         "unexpected_skills": contaminated,
@@ -745,12 +782,16 @@ def render_markdown(summary: dict) -> str:
     verdicts = summary["verdicts"]
     meta = summary["meta"]
     accuracy = totals["accuracy"]
+    repeat = meta.get("repeat", 1)
+    scope = f"{totals['prompts']} prompts"
+    if repeat > 1:
+        scope += f" run {repeat}x each ({totals['cases']} runs)"
     lines = [
         "## Skill routing eval",
         "",
         f"**{totals['passed']}/{totals['graded']} correct "
         f"({'n/a' if accuracy is None else f'{accuracy:.1%}'})** across "
-        f"{totals['cases']} prompts with {len(meta['skills'])} marketplace skills "
+        f"{scope} with {len(meta['skills'])} marketplace skills "
         f"installed together, on `{meta['model']}` (effort `{meta['effort']}`).",
         "",
         "| Verdict | Count | Meaning |",
@@ -774,6 +815,29 @@ def render_markdown(summary: dict) -> str:
             f"{'n/a' if acc is None else f'{acc:.0%}'} |"
         )
 
+    if summary.get("by_prompt"):
+        flaky = [p for p in summary["by_prompt"] if not p["consistent"]]
+        lines += [
+            "",
+            "### Stability across repeats",
+            "",
+            f"{len(flaky)} of {len(summary['by_prompt'])} prompts routed "
+            f"differently between runs.",
+            "",
+            "| Case | Expected | Correct runs | Routed to |",
+            "| --- | --- | --- | --- |",
+        ]
+        for prompt in summary["by_prompt"]:
+            landed = ", ".join(
+                f"{name} x{count}" for name, count in prompt["observed"].items()
+            )
+            errors = f" (+{prompt['errors']} errored)" if prompt["errors"] else ""
+            lines.append(
+                f"| `{prompt['id']}`{'' if prompt['consistent'] else ' (flaky)'} | "
+                f"{prompt['expect'] or '(no skill)'} | "
+                f"{prompt['passed']}/{prompt['graded']}{errors} | {landed or 'n/a'} |"
+            )
+
     lines += [
         "",
         "### Per skill",
@@ -791,6 +855,10 @@ def render_markdown(summary: dict) -> str:
             f"{'n/a' if precision is None else f'{precision:.0%}'} |"
         )
 
+    def label(case: dict) -> str:
+        run = f" (run {case['run']})" if repeat > 1 else ""
+        return f"`{case['id']}`{run}"
+
     # Errors get their own section: a crashed run says nothing about routing,
     # so listing it as a routing failure would be misleading.
     failures = [c for c in summary["cases"] if not c["passed"] and c["verdict"] != "error"]
@@ -807,7 +875,7 @@ def render_markdown(summary: dict) -> str:
             if len(prompt) > 110:
                 prompt = prompt[:110] + "..."
             lines.append(
-                f"| `{case['id']}` | {case['category']} | {case['expect'] or '(no skill)'} | "
+                f"| {label(case)} | {case['category']} | {case['expect'] or '(no skill)'} | "
                 f"{case['observed'] or '(no skill)'} | {case['verdict']} | {prompt} |"
             )
 
@@ -822,7 +890,7 @@ def render_markdown(summary: dict) -> str:
         ]
         for case in errored:
             detail = (case["error"] or "unknown").replace("|", "\\|").replace("\n", " ")
-            lines.append(f"| `{case['id']}` | {case['stop_reason']} | {detail[:160]} |")
+            lines.append(f"| {label(case)} | {case['stop_reason']} | {detail[:160]} |")
 
     lines += [
         "",
@@ -833,7 +901,7 @@ def render_markdown(summary: dict) -> str:
     ]
     for case in summary["cases"]:
         lines.append(
-            f"| `{case['id']}` | {case['expect'] or '(no skill)'} | "
+            f"| {label(case)} | {case['expect'] or '(no skill)'} | "
             f"{case['observed'] or '(no skill)'} | {case['verdict']} | "
             f"{case['stop_reason']} | {case['elapsed_s']} |"
         )
@@ -887,6 +955,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only", default="", help="Comma-separated case ids or expected skill names to run.")
     parser.add_argument("--jobs", type=int, default=4, help="Cases to run concurrently. Each gets its own workspace and session. Default: 4.")
     parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help=(
+            "Run every prompt this many times. Routing is not deterministic, so "
+            "repeats separate a prompt that always misroutes from one that only "
+            "sometimes does -- at a proportional cost in tokens and wall time. "
+            "Default: 1."
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=240.0,
@@ -931,6 +1010,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     args.model = enforce_model_policy(args.model)
+    if args.repeat < 1:
+        raise SystemExit(f"error: --repeat must be at least 1 (got {args.repeat})")
 
     skills = marketplace_skills()
     cases = load_cases(Path(args.prompts))
@@ -954,21 +1035,29 @@ def main(argv: list[str] | None = None) -> int:
         if not ok:
             raise SystemExit(f"error: claude API not reachable -- {detail}")
 
+    # Case-major so the report groups a prompt's repeats together; the pool
+    # does not care about the order.
+    schedule = [(case, run) for case in cases for run in range(1, args.repeat + 1)]
+
     print(f"[routing] skills installed per case: {', '.join(skills)}")
-    print(f"[routing] {len(cases)} cases, model={args.model}, effort={args.effort}, jobs={args.jobs}")
+    print(
+        f"[routing] {len(cases)} cases x {args.repeat} run(s) = {len(schedule)} runs, "
+        f"model={args.model}, effort={args.effort}, jobs={args.jobs}"
+    )
 
     started = time.time()
-    if args.jobs > 1 and len(cases) > 1:
+    if args.jobs > 1 and len(schedule) > 1:
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-            outcomes = list(pool.map(lambda c: run_case(c, skills, args), cases))
+            outcomes = list(pool.map(lambda item: run_case(item[0], skills, args, item[1]), schedule))
     else:
-        outcomes = [run_case(case, skills, args) for case in cases]
+        outcomes = [run_case(case, skills, args, run) for case, run in schedule]
 
     meta = {
         "model": args.model,
         "effort": args.effort,
         "skills": skills,
         "prompts": str(Path(args.prompts).name),
+        "repeat": args.repeat,
         "wall_time_s": round(time.time() - started, 1),
         "max_tool_calls": args.max_tool_calls,
         "max_inspection_calls": args.max_inspection_calls,
