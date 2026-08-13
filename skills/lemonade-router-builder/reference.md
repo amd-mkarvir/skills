@@ -202,15 +202,32 @@ for keyword/metadata conditions. Registration errors come back as descriptive
 parser messages (e.g. `routing.default_model 'X' must be listed in
 routing.candidates`); fix the field it names and re-POST.
 
-`default_used: true` + `matched_rule: ""` is the only reliable fallback
-signal - an empty `rationale` alone is not, since a successful Mode A route to
-a non-first candidate commonly returns one too. In Mode A, a non-fallback
-`matched_rule` is a synthetic id (`__route_0`, `__route_1`, … - one per
-`routing.candidates` entry, in declaration order), not an author-given one;
-seeing one of these is expected, not an error. For classifier-backed rules,
-also check the per-condition `score` in `trace[]` - stuck at `0.0` across
-clearly-matching test inputs signals a mismatched `labels` entry, not a
-non-match (see [Classifier entries](#classifier-entries)).
+### Reading a Mode A trace
+
+Mode A has no author-supplied rule ids, so `matched_rule` reports synthetic
+ones - `__route_0`, `__route_1`, ... - one per entry in `routing.candidates`,
+in declaration order; seeing one of these is expected, not an error.
+
+Three things about these traces are easy to misread. Observed at 11.5.2:
+
+- **An empty `rationale` is not a failure signal.** Routing to a candidate
+  other than the first commonly returns `"rationale": ""` and `"score": 0.0`
+  on a perfectly successful decision.
+- **Fallback has one unambiguous signature** - all three together:
+
+  ```json
+  { "default_used": true, "matched_rule": "", "rationale": "", "score": 0.0 }
+  ```
+
+  with `x-lemonade-route: default`. Check `default_used`, not the rationale.
+- **For classifier-backed rules, also check the per-condition `score`.** Stuck
+  at `0.0` in `trace[]` across clearly-matching test inputs signals a
+  mismatched `labels` entry, not a non-match (see
+  [Classifier entries](#classifier-entries)).
+
+A fallback returns HTTP 200 with no error field, so a policy that falls back on
+every single request is indistinguishable from a working one unless you ask for
+the trace.
 
 ## Desktop-editor compatibility
 
