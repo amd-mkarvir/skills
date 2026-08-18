@@ -23,9 +23,9 @@ configured LLM. This rule only redirects the multimodal calls.
 
 | Endpoint | Model | Notes |
 |---|---|---|
-| `/v1/images/generations` | `{{IMAGE_MODEL}}` | 4 steps, `cfg_scale: 1.0`, `512x512`, `response_format: "b64_json"`. |
+| `/v1/images/generations` | `{{IMAGE_MODEL}}` | 4 steps, `cfg_scale: 1.0`, `512x512`, `response_format: "b64_json"`. First use pulls ~5 GB if the model is not cached. Image generation and LLM inference share the GPU: coresident models are generally fine on high-memory hosts, but **concurrent inference is not**. If a long-running job is in flight, ask before generating. |
 | `/v1/audio/speech` | `{{TTS_MODEL}}` | Default voice `shimmer`; `response_format: "mp3"`. |
-| `/v1/audio/transcriptions` | `{{STT_MODEL}}` | Input must be 16 kHz mono WAV. Re-encode with `ffmpeg -i in.* -ar 16000 -ac 1 out.wav`. |
+| `/v1/audio/transcriptions` | `{{STT_MODEL}}` | Input must be 16 kHz mono WAV. Re-encode with `ffmpeg -i in.* -ar 16000 -ac 1 out.wav`. Transcripts of long audio are **not** guaranteed byte-stable: two identical requests can return different text. Do not use a transcript as a cache key, content hash, or diff target. If a job needs reproducible output, transcribe once and store the result. |
 
 If `LEMONADE_API_KEY` is set in the environment, send
 `Authorization: Bearer $LEMONADE_API_KEY` on every request. Otherwise the
@@ -92,9 +92,19 @@ curl -sX POST {{LEMONADE_BASE_URL}}/audio/transcriptions \
       recent lines for the underlying error — for example a download/write error
       (such as `CURL code 23`) or an out-of-space message. Surface that line
       to the user rather than waiting through silent retries.
-4. Only after that, ask the user before falling back to a cloud provider.
-   Never silently fall back; the whole point of this rule is predictable
-   cost.
+4. Only after that, fallback policy is **per modality. Do not generalise
+   from one row to another:**
+
+   | Modality | On local failure |
+   |---|---|
+   | Image generation | Tell the user the local call failed, then offer cloud. Outputs are interchangeable; mixing sources costs nothing but money. |
+   | Text-to-speech | Same. If files are kept side by side, record which engine produced each. |
+   | Speech-to-text | Offer cloud, and state that the transcript came from a different engine. Never mix engines inside one corpus without recording per-file provenance. |
+   | Embeddings, reranking, or any index-backed modality | **Never fall back automatically, even with disclosure.** Vectors and scores from a different model are not comparable to what is already in the index, so a partial fallback silently invalidates it. Stop, name the items that were not processed, and let the user choose between waiting for local and re-processing the whole corpus with one model. |
+
+   Never silently fall back to any modality; disclosure is necessary but for
+   an index-backed modality it is not sufficient, because "local failed,
+   used cloud instead" reads as benign while it corrupts the index.
 
 ### Re-pointing to a different host
 

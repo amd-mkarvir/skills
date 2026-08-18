@@ -21,6 +21,11 @@ The default trio (`SD-Turbo`, `kokoro-v1`, `Whisper-Tiny`) is sized for
 "keeps cost savings real on a typical laptop". Override only if the user
 asks for higher quality or has explicit hardware to spare.
 
+Model IDs below were verified against Lemonade **11.5.2**. Catalogs move;
+confirm any ID with `GET /api/v1/models` (add `?show_all=true` for the full
+catalog) before writing it into the rule. Do not rely on a stale
+`server_models.json` snapshot.
+
 ### Image generation (`recipe: sd-cpp`)
 
 | Model | Approx size | When to use | Trade-off |
@@ -64,6 +69,16 @@ Whisper requires 16 kHz mono PCM WAV input. Convert anything else first:
 ffmpeg -i input.mp3 -ar 16000 -ac 1 input.wav
 ```
 
+The HTTP endpoint adds no meaningful overhead over calling `whisper-cli`
+directly on the same engine/backend/model. Throughput is equivalent; use the
+endpoint unless you have a specific reason not to.
+
+Transcripts of long audio are not guaranteed byte-stable across identical
+requests: Lemonade's server-side handling can vary chunk boundaries even when
+the underlying whisper.cpp run is deterministic. Do not use a transcript as a
+cache key or diff target; transcribe once and store the result if you need
+reproducible output.
+
 For full live coverage, run `lemonade list` after starting the server, or
 browse <https://lemonade-server.ai/models.html>.
 
@@ -102,6 +117,22 @@ Notable per-endpoint quirks:
 
 For the full parameter list of any endpoint, see `lemonade/docs/api/openai.md`
 upstream.
+
+### If you extend the rule beyond these three modalities
+
+`/api/v1/<route>` and `/v1/<route>` are aliases for everything above, so the
+two spellings used across this skill are interchangeable. Two routes outside
+the three modalities do **not** follow that pattern, and matter if you point
+the rule at chat, embeddings, or retrieval:
+
+| Route | Correct path | What 404s |
+|---|---|---|
+| Anthropic Messages | `/v1/messages` | `/api/v1/messages` |
+| Reranking | `/api/v1/reranking` | `/api/v1/rerank`, `/v1/rerank` |
+
+`/v1/rerank` is the conventional spelling (Jina, Cohere, vLLM, llama.cpp), and
+the per-model back-port lemond supervises does serve it — but the proxy on
+`13305` does not.
 
 ---
 
