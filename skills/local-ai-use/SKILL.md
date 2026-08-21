@@ -261,15 +261,12 @@ message. The rule explicitly tells the agent:
   cloud TTS providers (OpenAI TTS, ElevenLabs, etc.).
 - **For speech-to-text:** call `POST /api/v1/audio/transcriptions`. Do
   **not** call cloud transcription providers.
-- **Fallback is per modality, not one global rule.** For image generation and
-  text-to-speech, only fall back to a cloud API after one local attempt has
+- **Fallback:** only fall back to a cloud API after one local attempt has
   failed *and* the user has been told the local call failed. Never silently;
-  the whole point of this skill is to keep cost predictable. Speech-to-text may
-  also fall back with disclosure, but the disclosure must say the transcript
-  came from a different engine, since mixed-engine transcripts should not be
-  compared or deduplicated. See `templates/local-ai-rule.md` for the full
-  per-modality table, which also covers embeddings/reranking/index-backed
-  modalities for anyone extending this rule beyond the three shipped here.
+  the whole point of this skill is to keep cost predictable. For
+  speech-to-text, the disclosure must also say the transcript came from a
+  different engine, since mixed-engine transcripts should not be compared or
+  deduplicated.
 
 The agent's own text reasoning continues to use whatever LLM Cursor / Claude
 Code / Codex is configured with. This skill does not redirect chat tokens;
@@ -288,8 +285,6 @@ machine.
 | Image generation is slow on CPU (~4–5 min) | sd-cpp on CPU backend | Install the GPU backend on supported AMD hardware: `lemonade backends install sd-cpp:rocm`. |
 | Still slow after installing the GPU backend | The backend is installed but not actually engaged; the runtime fell back to CPU silently | An `installed` state in `system-info` and a successful `rocminfo` both still permit a silent CPU fallback. Check real GPU utilisation (`gpu_busy_percent`) during a request, and confirm the host's GPU driver stack rather than re-installing the backend. |
 | `POST /v1/audio/transcriptions` returns 400 unsupported format | Input is not 16 kHz mono WAV | Re-encode with `ffmpeg -i in.* -ar 16000 -ac 1 out.wav`. |
-| `POST /v1/audio/transcriptions` returns `500 model_load_error` with `Unable to resolve writable runtime directory from XDG_RUNTIME_DIR or RUNTIME_DIRECTORY` | The `lemond` unit's `RuntimeDirectory=` has been cleared by a local drop-in. `whispercpp` needs it; `llamacpp` and `kokoro` do not, so chat and TTS keep working while this happens | Restore `RuntimeDirectory=lemonade` in the drop-in (`/etc/systemd/system/lemond.service.d/`), then `sudo systemctl daemon-reload && sudo systemctl restart lemond`. The packaged unit already sets it. |
-| `POST /v1/audio/transcriptions` returns `500 model_load_error` with `whisper-server failed to start or become ready` | The whisper backend process aborted at startup. On Linux with the ROCm backend this is usually the unbundled comgr dependency: `whispercpp:rocm` ships `libamd_comgr_loader.so*` but not the `libamd_comgr.so.3` those stubs `dlopen`, which exists only in system ROCm | Check the server log for `exit code: 134` and `implib-gen: libamd_comgr.so.3: failed to load library`. Install the self-contained Vulkan backend instead (`lemonade backends install whispercpp:vulkan`) and retry; Lemonade switches the per-model backend itself. Do not work around it by exporting `LD_LIBRARY_PATH=/opt/rocm/lib` into the service. |
 | `POST /v1/audio/speech` returns 404 | TTS model not downloaded | `lemonade pull kokoro-v1`. |
 | 401 Unauthorized on every request | User has set `LEMONADE_API_KEY` | Add `Authorization: Bearer $LEMONADE_API_KEY` to every request and to the rule block. |
 

@@ -118,22 +118,6 @@ Notable per-endpoint quirks:
 For the full parameter list of any endpoint, see `lemonade/docs/api/openai.md`
 upstream.
 
-### If you extend the rule beyond these three modalities
-
-`/api/v1/<route>` and `/v1/<route>` are aliases for everything above, so the
-two spellings used across this skill are interchangeable. Two routes outside
-the three modalities do **not** follow that pattern, and matter if you point
-the rule at chat, embeddings, or retrieval:
-
-| Route | Correct path | What 404s |
-|---|---|---|
-| Anthropic Messages | `/v1/messages` | `/api/v1/messages` |
-| Reranking | `/api/v1/reranking` | `/api/v1/rerank`, `/v1/rerank` |
-
-`/v1/rerank` is the conventional spelling (Jina, Cohere, vLLM, llama.cpp), and
-the per-model back-port lemond supervises does serve it — but the proxy on
-`13305` does not.
-
 ---
 
 ## API key handling
