@@ -21,10 +21,10 @@ The default trio (`SD-Turbo`, `kokoro-v1`, `Whisper-Tiny`) is sized for
 "keeps cost savings real on a typical laptop". Override only if the user
 asks for higher quality or has explicit hardware to spare.
 
-Model IDs below were verified against Lemonade **11.5.2**. Catalogs move;
-confirm any ID with `GET /api/v1/models` (add `?show_all=true` for the full
-catalog) before writing it into the rule. Do not rely on a stale
-`server_models.json` snapshot.
+Model catalogs move between releases, so treat the IDs below as a starting
+point, not a fixed list. Confirm any ID with `GET /api/v1/models` (add
+`?show_all=true` for the full catalog) before writing it into the rule. Do
+not rely on a stale `server_models.json` snapshot.
 
 ### Image generation (`recipe: sd-cpp`)
 
@@ -72,12 +72,6 @@ ffmpeg -i input.mp3 -ar 16000 -ac 1 input.wav
 The HTTP endpoint adds no meaningful overhead over calling `whisper-cli`
 directly on the same engine/backend/model. Throughput is equivalent; use the
 endpoint unless you have a specific reason not to.
-
-Transcripts of long audio are not guaranteed byte-stable across identical
-requests: Lemonade's server-side handling can vary chunk boundaries even when
-the underlying whisper.cpp run is deterministic. Do not use a transcript as a
-cache key or diff target; transcribe once and store the result if you need
-reproducible output.
 
 For full live coverage, run `lemonade list` after starting the server, or
 browse <https://lemonade-server.ai/models.html>.

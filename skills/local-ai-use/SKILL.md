@@ -82,9 +82,10 @@ instead.
   `lemonade pull` in `reference.md`).
 - **Network:** required for the install download and the first `lemonade pull`
   of each model. After that, every modality runs offline.
-- **Tested against:** Lemonade **11.5.2** (requires v10.1.0 or newer). Model
-  IDs and `system-info` fields can change between releases; confirm against the
-  version actually installed.
+- **Version:** requires v10.1.0 or newer (the unified `lemonade` CLI this
+  skill targets). Model IDs and `system-info` fields can change between
+  releases; confirm against `lemonade status` and `GET /api/v1/models` on the
+  version actually installed rather than assuming this document is current.
 
 ## The opinionated path
 
