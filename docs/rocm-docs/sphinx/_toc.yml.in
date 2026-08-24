@@ -1,0 +1,17 @@
+root: index
+subtrees:
+  - caption: What is a Skill?
+    entries:
+      - file: concepts/index
+  - caption: Install
+    entries:
+      - file: install/installation
+  - caption: Walkthroughs
+    entries:
+      - file: walkthroughs/index
+        subtrees:
+          - entries:
+              - file: walkthroughs/lemonade-router-builder
+  - caption: License
+    entries:
+      - file: license
