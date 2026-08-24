@@ -1,4 +1,19 @@
 {
+  "comment": [
+    "Copy to skills/<your-skill>/evals/evals.json -- the catalog contract, run",
+    "here on every pull request. Every routing prompt belongs in this file,",
+    "the `skill_should_trigger: false` near misses most of all: they assert",
+    "that nothing in the published bundle fires, which only this repo can",
+    "grade, and they are the cheapest cases in the suite.",
+    "",
+    "Behavior cases are capped by time, not count: each skill's suite gets 15",
+    "minutes. Keep the ones that pin down what this skill exists to do, and",
+    "put the deep and slow ones in evals/extended_evals.json -- same shape,",
+    "same fields, run by the repo that owns this skill on its own CI. Moving a",
+    "case between the two files is a cut and paste.",
+    "",
+    "See docs/evals.md. Delete this comment."
+  ],
   "evaluations": [
     {
       "id": "REPLACE-positive-with-expectations",

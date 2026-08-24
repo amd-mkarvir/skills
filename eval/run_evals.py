@@ -19,6 +19,13 @@ The prompt is written once and both modes read it, which is the whole point:
 the old split had a central routing prompt set and a separate per-skill pytest
 file that re-asserted routing with a substring match on the transcript.
 
+``evals.json`` is the catalog contract, not a skill's whole suite. Each skill's
+behavior cases get a wall-clock budget (``--budget-minutes``), and a case that
+does not fit fails with a pointer to ``evals/extended_evals.json`` -- the file
+this runner never reads, holding the deep tests the repo that owns the skill
+runs on its own CI. Time is the only cap: what a case costs is how long it
+takes, which no field in a dataset knows.
+
 Usage::
 
     # everything a skill owner needs before opening a PR
@@ -60,12 +67,23 @@ sys.path.insert(0, str(EVAL_DIR))
 import datasets  # noqa: E402
 import routing  # noqa: E402
 from agent import (  # noqa: E402
+    CaseTimeout,
     Check,
     check_api_reachable,
     claude,
     enforce_model_policy,
 )
 from datasets import Case  # noqa: E402
+
+# Said whenever a case runs out of budget, and the only place this runner names
+# the other file. The budget's whole purpose is that the person who broke it
+# learns what to do about it, and "move a case" is the answer -- a suite that
+# no longer fits has outgrown the catalog contract, not the budget.
+BUDGET_HINT = (
+    "The catalog suite has a wall-clock budget per skill. Move a case to "
+    f"{datasets.EXTENDED_DATASET_RELPATH.as_posix()}, which the repo that owns "
+    "this skill runs on its own CI."
+)
 
 
 @dataclass
@@ -79,6 +97,10 @@ class BehaviorOutcome:
     elapsed_s: float
     checks: list[dict] = field(default_factory=list)
     error: str | None = None
+    # Never started, as opposed to started and failed. Both are failures, but
+    # reporting the first as the second sends whoever reads it looking for a
+    # bug in a run that does not exist.
+    not_run: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -130,9 +152,19 @@ def _expand(text: str, ctx: dict) -> str:
 
 
 def run_behavior_case(
-    case: Case, ctx: dict, hooks: ModuleType | None, model: str, effort: str
+    case: Case,
+    ctx: dict,
+    hooks: ModuleType | None,
+    model: str,
+    effort: str,
+    timeout: float | None = None,
 ) -> BehaviorOutcome:
-    """Stage one skill, run the prompt to completion, grade what happened."""
+    """Stage one skill, run the prompt to completion, grade what happened.
+
+    ``timeout`` is what is left of the skill's budget. Passing it down means a
+    single hung run costs that budget rather than the whole CI job, and fails
+    with an explanation instead of as an unattributed job timeout.
+    """
     assert case.skill is not None
     seed = (datasets.SKILLS_DIR / case.skill / case.workspace) if case.workspace else None
     started = time.perf_counter()
@@ -147,7 +179,7 @@ def run_behavior_case(
             if hooks is not None and hasattr(hooks, "setup"):
                 case_ctx.update(hooks.setup(workspace, case, case_ctx) or {})
             try:
-                run = session.prompt(_expand(case.prompt, case_ctx))
+                run = session.prompt(_expand(case.prompt, case_ctx), timeout=timeout)
                 checks = run.evaluate(
                     logs_contain=[_expand(t, case_ctx) for t in case.logs_contain],
                     files_exist=[_expand(p, case_ctx) for p in case.files_exist],
@@ -163,6 +195,10 @@ def run_behavior_case(
             finally:
                 if hooks is not None and hasattr(hooks, "teardown"):
                     hooks.teardown(workspace, case, case_ctx)
+    except CaseTimeout as exc:
+        # Not an infra failure, so no traceback: the run was working, it was
+        # just taking longer than this suite is allowed to take.
+        error = f"{exc}. {BUDGET_HINT}"
     except Exception as exc:  # noqa: BLE001 -- an infra failure is a result too
         error = f"{type(exc).__name__}: {exc}"
         traceback.print_exc()
@@ -188,8 +224,46 @@ def run_behavior_case(
     )
 
 
-def run_behavior(skills: list[str], cases: list[Case], model: str, effort: str) -> list[BehaviorOutcome]:
-    """Run every behavior case, grouped by skill so session setup happens once."""
+def _not_run(case: Case, spent_s: float, budget_s: float) -> BehaviorOutcome:
+    """A case the budget never reached, recorded as a failure.
+
+    Not a skip: an expectation nobody checked is not an expectation that held,
+    and reporting it as passed-by-omission is how a suite quietly stops testing
+    the thing it was written for.
+    """
+    return BehaviorOutcome(
+        id=case.id,
+        skill=case.skill or "",
+        prompt=case.prompt,
+        passed=False,
+        elapsed_s=0.0,
+        error=(
+            f"this skill's suite had spent {spent_s / 60:.1f} of its "
+            f"{budget_s / 60:.0f}-minute budget before reaching this case. {BUDGET_HINT}"
+        ),
+        not_run=True,
+    )
+
+
+def run_behavior(
+    skills: list[str],
+    cases: list[Case],
+    model: str,
+    effort: str,
+    budget_s: float = 0.0,
+) -> list[BehaviorOutcome]:
+    """Run every behavior case, grouped by skill so session setup happens once.
+
+    ``budget_s`` caps each skill separately rather than the run as a whole,
+    because behavior is one CI job per skill: a skill added to the catalog
+    brings its own runner, so a per-skill number keeps meaning the same thing
+    however far federation goes, where a shared one would shrink everybody's
+    allowance every time a skill arrived.
+
+    Session setup counts against it -- hooks that clone a repo or start a
+    container spend real job time -- and each case is handed what is left, so
+    one long run cannot silently consume the cases behind it.
+    """
     outcomes: list[BehaviorOutcome] = []
     for skill in skills:
         skill_cases = [c for c in cases if c.skill == skill and c.has_behavior]
@@ -199,14 +273,30 @@ def run_behavior(skills: list[str], cases: list[Case], model: str, effort: str) 
         hooks = _load_hooks(skill)
         ctx: dict = {}
         cache_dir: Path | None = None
+        started = time.perf_counter()
         if hooks is not None and hasattr(hooks, "setup_session"):
             cache_dir = Path(tempfile.mkdtemp(prefix=f"evalcache-{skill}-"))
             print(f"[behavior] {skill}: running evals/hooks.py setup_session()", flush=True)
             ctx.update(hooks.setup_session(cache_dir) or {})
         try:
-            print(f"[behavior] {skill}: {len(skill_cases)} case(s)", flush=True)
-            for case in skill_cases:
-                outcomes.append(run_behavior_case(case, ctx, hooks, model, effort))
+            budget_note = f", budget {budget_s / 60:.0f}min" if budget_s > 0 else ""
+            print(f"[behavior] {skill}: {len(skill_cases)} case(s){budget_note}", flush=True)
+            for index, case in enumerate(skill_cases):
+                spent = time.perf_counter() - started
+                remaining = (budget_s - spent) if budget_s > 0 else None
+                if remaining is not None and remaining <= 0:
+                    unreached = skill_cases[index:]
+                    print(
+                        f"  [FAIL] {skill}: budget spent after {index} of "
+                        f"{len(skill_cases)} case(s); {len(unreached)} not run. "
+                        f"{BUDGET_HINT}",
+                        flush=True,
+                    )
+                    outcomes.extend(_not_run(c, spent, budget_s) for c in unreached)
+                    break
+                outcomes.append(
+                    run_behavior_case(case, ctx, hooks, model, effort, remaining)
+                )
         finally:
             if cache_dir is not None:
                 shutil.rmtree(cache_dir, ignore_errors=True)
@@ -222,6 +312,9 @@ def summarize_behavior(outcomes: list[BehaviorOutcome], meta: dict) -> dict:
             "passed": sum(1 for o in subset if o.passed),
             "checks": sum(len(o.checks) for o in subset),
             "checks_passed": sum(1 for o in subset for c in o.checks if c["passed"]),
+            # What the suite cost, which is the number to look at when deciding
+            # whether a case belongs in the catalog file at all.
+            "seconds": round(sum(o.elapsed_s for o in subset), 1),
         }
     return {
         "meta": meta,
@@ -247,13 +340,26 @@ def render_behavior_markdown(summary: dict) -> str:
         f"({totals['checks_passed']}/{totals['checks']} individual expectations) "
         f"on `{meta['model']}` (effort `{meta['effort']}`).",
         "",
-        "| Skill | Cases | Passed | Expectations | Met |",
-        "| --- | --- | --- | --- | --- |",
+    ]
+    budget_s = meta.get("budget_s") or 0
+    if budget_s:
+        lines += [
+            f"Each skill's suite has {budget_s / 60:.0f} minutes. Time is the "
+            f"only cap on a catalog dataset, so a suite that no longer fits has "
+            f"a case to move to "
+            f"`{datasets.EXTENDED_DATASET_RELPATH.as_posix()}`.",
+            "",
+        ]
+    lines += [
+        "| Skill | Cases | Passed | Expectations | Met | Seconds |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for skill, stats in summary["per_skill"].items():
+        over = " (over budget)" if budget_s and stats["seconds"] > budget_s else ""
         lines.append(
             f"| `{skill}` | {stats['cases']} | {stats['passed']} | "
-            f"{stats['checks']} | {stats['checks_passed']} |"
+            f"{stats['checks']} | {stats['checks_passed']} | "
+            f"{stats['seconds']}{over} |"
         )
 
     failures = [c for c in summary["cases"] if not c["passed"]]
@@ -265,7 +371,15 @@ def render_behavior_markdown(summary: dict) -> str:
         for case in failures:
             if case["error"]:
                 detail = case["error"].replace("|", "\\|").replace("\n", " ")
-                lines.append(f"| `{case['id']}` | error | (run failed) | {detail[:160]} |")
+                # Roomier than a check detail on purpose: this column is where
+                # a budget breach says what to do about it, and truncating to
+                # the diagnosis leaves the reader with only bad news.
+                unreached = case.get("not_run")
+                lines.append(
+                    f"| `{case['id']}` | {'not run' if unreached else 'error'} | "
+                    f"{'(never started)' if unreached else '(run failed)'} | "
+                    f"{detail[:300]} |"
+                )
             for check in case["checks"]:
                 if check["passed"]:
                     continue
@@ -349,15 +463,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reasoning effort. Default: high.",
     )
     parser.add_argument(
-        "--jobs", type=int, default=4,
-        help="Routing cases to run concurrently, each in its own workspace. Default: 4.",
+        "--jobs", type=int, default=datasets.ROUTING_JOBS,
+        help=(
+            "Routing cases to run concurrently, each in its own workspace. "
+            "The lever for keeping routing inside its budget as the catalog "
+            f"grows. Default: {datasets.ROUTING_JOBS}."
+        ),
     )
     parser.add_argument(
-        "--timeout", type=float, default=240.0,
+        "--timeout", type=float, default=datasets.ROUTING_TIMEOUT_S,
         help=(
             "Seconds before a routing case is abandoned. Generous because it "
             "only bites when the agent neither activates a skill nor answers. "
-            "Default: 240."
+            f"Default: {datasets.ROUTING_TIMEOUT_S:.0f}."
+        ),
+    )
+    parser.add_argument(
+        "--budget-minutes", type=float, default=datasets.CATALOG_BUDGET_S / 60,
+        help=(
+            "Wall-clock budget for each skill's behavior suite. A case that "
+            "does not fit fails and says so, rather than being discovered as an "
+            f"unattributed CI job timeout. 0 disables. Default: "
+            f"{datasets.CATALOG_BUDGET_S / 60:.0f}."
         ),
     )
     parser.add_argument(
@@ -497,6 +624,8 @@ def main(argv: list[str] | None = None) -> int:
                 "effort": args.effort,
                 "skills": catalog,
                 "held_out_skills": held_out,
+                "budget_s": max(0.0, args.budget_minutes * 60),
+                "jobs": args.jobs,
                 "wall_time_s": round(time.time() - started, 1),
                 "max_tool_calls": args.max_tool_calls,
                 "max_inspection_calls": args.max_inspection_calls,
@@ -544,13 +673,17 @@ def main(argv: list[str] | None = None) -> int:
                 "`files_exist` to a triggering evaluation."
             )
         else:
-            outcomes = run_behavior(skills, gradable, args.model, args.effort)
+            budget_s = max(0.0, args.budget_minutes * 60)
+            outcomes = run_behavior(
+                skills, gradable, args.model, args.effort, budget_s
+            )
             summary = summarize_behavior(
                 outcomes,
                 {
                     "model": args.model,
                     "effort": args.effort,
                     "skills": skills,
+                    "budget_s": budget_s,
                     "wall_time_s": round(time.time() - started, 1),
                     "github_run_id": os.environ.get("GITHUB_RUN_ID"),
                 },

@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -80,6 +81,47 @@ def enforce_model_policy(model: str | None) -> str | None:
         f"'{AUTOMATED_MODEL}' to pin the CI model."
     )
     return AUTOMATED_MODEL
+
+
+def spawn_kwargs() -> dict:
+    """Popen options that put the CLI in its own process group.
+
+    Needed so ``terminate_process`` can kill the whole tree; without it there
+    is nothing to address but the parent.
+    """
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def terminate_process(proc: subprocess.Popen) -> None:
+    """Kill the CLI and its children.
+
+    The `claude` process spawns helpers, so killing only the parent can leave
+    an orphan holding the API call open -- which is the cost a timeout exists
+    to avoid. Kill the whole group/tree.
+    """
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                check=False,
+            )
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def claude_env() -> dict[str, str]:
@@ -150,8 +192,32 @@ def _stage_workspace(skill: str, seed: Path | None = None) -> Path:
     return workspace
 
 
-def _run_agent(prompt_text: str, workspace: Path, model: str | None, effort: str | None) -> list[dict]:
-    """Run the agent once in ``workspace`` and return the stream-json events."""
+class CaseTimeout(RuntimeError):
+    """One agent run was abandoned before it finished.
+
+    Carries the limit it broke so the caller can say where that limit came
+    from. This module only knows that there was one.
+    """
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"the agent run was cut off after {seconds:.0f}s")
+        self.seconds = seconds
+
+
+def _run_agent(
+    prompt_text: str,
+    workspace: Path,
+    model: str | None,
+    effort: str | None,
+    timeout: float | None = None,
+) -> list[dict]:
+    """Run the agent once in ``workspace`` and return the stream-json events.
+
+    ``timeout`` caps this single run. Exceeding it kills the process tree and
+    raises ``CaseTimeout`` rather than grading a partial transcript: a run that
+    had to be abandoned has no result, and one left running would keep
+    spending on the call the eval already gave up on.
+    """
     claude_bin = shutil.which("claude")
     if not claude_bin:
         raise RuntimeError("'claude' CLI not found on PATH")
@@ -167,13 +233,26 @@ def _run_agent(prompt_text: str, workspace: Path, model: str | None, effort: str
     if effort:
         cmd += ["--effort", effort]
 
-    proc = subprocess.run(
-        cmd, cwd=str(workspace), capture_output=True, text=True,
-        encoding="utf-8", input=prompt_text, env=claude_env(),
+    proc = subprocess.Popen(
+        cmd, cwd=str(workspace),
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace",
+        env=claude_env(), **spawn_kwargs(),
     )
+    try:
+        stdout, stderr = proc.communicate(input=prompt_text, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        terminate_process(proc)
+        # Drain the killed tree's pipes so nothing is left half-open. Bounded,
+        # because the point of getting here was to stop waiting.
+        try:
+            proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
+        raise CaseTimeout(float(timeout)) from None
 
     events: list[dict] = []
-    for line in (proc.stdout or "").splitlines():
+    for line in (stdout or "").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -185,7 +264,7 @@ def _run_agent(prompt_text: str, workspace: Path, model: str | None, effort: str
     if not events:
         raise RuntimeError(
             f"claude exited with code {proc.returncode} and produced no "
-            f"parseable stream-json output. stderr:\n{proc.stderr}"
+            f"parseable stream-json output. stderr:\n{stderr}"
         )
     return events
 
@@ -486,13 +565,18 @@ class Agent:
             shutil.rmtree(self.workspace, ignore_errors=True)
             self.workspace = None
 
-    def prompt(self, text: str) -> Run:
-        """Run ``text`` through the agent once and return a Run to grade."""
+    def prompt(self, text: str, timeout: float | None = None) -> Run:
+        """Run ``text`` through the agent once and return a Run to grade.
+
+        ``timeout`` caps this run; see ``_run_agent``. A caller working to a
+        budget passes what it has left, so an overrun costs that budget rather
+        than the whole job.
+        """
         if self.workspace is None:
             raise RuntimeError("Agent.prompt() must be called inside a 'with' block")
 
         _safe_print(f"\n[behavior] skill='{self.skill}' model='{self.model}': {text}")
-        events = _run_agent(text, self.workspace, self.model, self.effort)
+        events = _run_agent(text, self.workspace, self.model, self.effort, timeout)
         return Run(workspace=self.workspace, events=events, judge_model=self.model)
 
 

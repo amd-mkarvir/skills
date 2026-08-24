@@ -12,6 +12,11 @@ For each source, the script:
 2. Copies each named skill folder into `skills/<skill>/`. When refreshing an
    existing import, a local `evals/` subdirectory is kept if the upstream
    skill folder does not ship one (catalog-authored behavioral tests).
+   Transitional: as source repos take over authoring their own evals, they
+   ship `evals/` themselves and nothing here needs preserving, so this
+   behavior is on a path to deletion rather than to finer granularity.
+   A source repo's `evals/extended_evals.json` is copied like any other
+   file and never read here; see `eval/datasets.py` for why.
 2b. Optionally vendors the skill under a different local catalog name (the
    `as:` field on a skill entry). Federated skills follow a
    `<projectrepo>-<skill>` naming convention in this catalog (e.g. the

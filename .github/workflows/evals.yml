@@ -15,6 +15,13 @@ name: evals
 # SKILL.md description or a dataset), and behavior runs only for the skills a
 # change touches. The whole suite runs when the shared engine changes.
 #
+# What runs here is a skill's evals/evals.json and nothing else. A federated
+# skill's evals/extended_evals.json holds the expensive end of its suite and is
+# run by the repo that owns the skill, on its own CI, with a shared copy of this
+# harness -- so a change confined to that file schedules nothing. Each skill's
+# catalog suite gets 15 minutes; a case that no longer fits is a case to move
+# across, which is why nothing here counts cases.
+#
 # Which class of machine a skill's behavior job needs is declared by the skill,
 # in skills/<name>/evals/machine.yml, and resolved to labels, gates, and
 # credentials by eval/datasets.py. Nothing here names a skill: a hardcoded list
@@ -79,6 +86,7 @@ jobs:
       scoped: ${{ steps.select.outputs.scoped }}
       scoped_any: ${{ steps.select.outputs.scoped_any }}
       skipped: ${{ steps.select.outputs.skipped }}
+      forecast: ${{ steps.select.outputs.forecast }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -141,8 +149,32 @@ jobs:
               lines.append(key + "=" + json.dumps(plan[key]))
           for key in ("default", "scoped"):
               lines.append(key + "_any=" + str(bool(plan[key])).lower())
+          lines.append("forecast=" + json.dumps(plan["routing_forecast"]))
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write("\n".join(lines) + "\n")
+          '
+
+      # Routing is the only job sized by the whole catalog rather than by the
+      # change, so this is the number that stops fitting with nobody at fault.
+      # Printed, not warned about: the bound assumes every case hangs to its
+      # timeout, and a warning on every run is a warning nobody reads.
+      - name: Report the routing budget forecast
+        env:
+          FORECAST: ${{ steps.select.outputs.forecast }}
+        run: |
+          printf '%s' "$FORECAST" | python3 -c '
+          import json, sys
+          f = json.load(sys.stdin)
+          print("routing prompts: %d" % f["cases"])
+          print("concurrency:     %d" % f["jobs"])
+          print("budget:          %d min" % (f["budget_s"] // 60))
+          print("worst case:      %d min, every case hanging to its timeout"
+                % (f["worst_case_s"] // 60))
+          needed = f["jobs_for_budget"]
+          if needed and needed > f["jobs"]:
+              print("to guarantee the budget at this size: --jobs %d" % needed)
+          elif not needed:
+              print("no concurrency guarantees the budget: one case can outlast it")
           '
 
   # A routing decision is made from skill descriptions alone, so this needs no
@@ -153,9 +185,11 @@ jobs:
     needs: discover
     if: needs.discover.outputs.routing == 'true'
     runs-on: [self-hosted, strix_halo, Linux]
-    # Each case is killed as soon as its routing decision is observable, so
-    # this is far shorter than a behavior run; the cap catches a hung agent.
-    timeout-minutes: 40
+    # Each case is killed as soon as its routing decision is observable, so a
+    # healthy run lands well inside the 15-minute budget the report measures
+    # against. This is only the backstop for an agent that hangs, kept close
+    # enough to the budget that a run which blows it stops burning minutes.
+    timeout-minutes: 25
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ORCHESTR_API_KEY }}
       ANTHROPIC_BASE_URL: https://llm-api.amd.com/Anthropic
@@ -215,9 +249,10 @@ jobs:
     needs: discover
     if: needs.discover.outputs.default_any == 'true'
     runs-on: ${{ fromJSON(matrix.runner) }}
-    # Behavior runs install local models and can take a while; cap it so a hung
-    # agent or a stalled model pull fails the job instead of burning minutes.
-    timeout-minutes: 45
+    # The runner enforces the real limit: each skill's suite gets 15 minutes and
+    # a case that does not fit fails saying so. This only has to cover that plus
+    # job setup, and exists for the case the runner cannot cut off itself.
+    timeout-minutes: 25
     strategy:
       # One skill / OS failing should not hide the others' results.
       fail-fast: false
@@ -259,7 +294,7 @@ jobs:
     needs: discover
     if: needs.discover.outputs.scoped_any == 'true'
     runs-on: ${{ fromJSON(matrix.runner) }}
-    timeout-minutes: 45
+    timeout-minutes: 25
     environment:
       name: ${{ matrix.environment }}
     strategy:

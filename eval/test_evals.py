@@ -15,9 +15,11 @@ quietly drifted from what the runner enforces is worse than no schema at all.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -405,6 +407,81 @@ class TestRepositoryDatasets(unittest.TestCase):
         self.assertEqual(datasets.tier0_errors("local-ai-use", cases), [])
 
 
+class TestTheCatalogNeverReadsTheExtendedFile(unittest.TestCase):
+    """The filename is the whole declaration, so it has to actually decide."""
+
+    def test_the_two_datasets_are_siblings_with_distinct_names(self) -> None:
+        self.assertEqual(
+            datasets.EXTENDED_DATASET_RELPATH.parent, datasets.DATASET_RELPATH.parent
+        )
+        self.assertNotEqual(
+            datasets.EXTENDED_DATASET_RELPATH.name, datasets.DATASET_RELPATH.name
+        )
+
+    def test_an_extended_file_is_not_loaded(self) -> None:
+        # Written beside a real dataset with a duplicate id and a broken shape:
+        # if anything read it, both would surface as validation errors.
+        skill = datasets.skills_with_datasets()[0]
+        planted = datasets.SKILLS_DIR / skill / datasets.EXTENDED_DATASET_RELPATH
+        self.assertFalse(planted.exists(), f"{planted} already exists")
+        existing = datasets.load_dataset(skill)
+        planted.write_text(
+            json.dumps({EVALUATIONS_KEY: [{"id": existing[0].id, "nonsense": True}]}),
+            encoding="utf-8",
+        )
+        try:
+            self.assertEqual(
+                [c.id for c in datasets.load_dataset(skill)],
+                [c.id for c in existing],
+            )
+            self.assertEqual(datasets.validate_all(), [])
+        finally:
+            planted.unlink()
+
+    def test_no_skill_ships_an_extended_file_the_parser_would_choke_on(self) -> None:
+        # Never read, so never validated -- but a case promoted into the
+        # catalog file has to be a straight move, and that only holds while the
+        # two files agree on their shape.
+        for skill in datasets.catalog_skills():
+            path = datasets.SKILLS_DIR / skill / datasets.EXTENDED_DATASET_RELPATH
+            if not path.is_file():
+                continue
+            with self.subTest(skill=skill):
+                errors: list[str] = []
+                datasets._parse_cases(
+                    json.loads(path.read_text(encoding="utf-8")), skill, path, errors
+                )
+                self.assertEqual(errors, [])
+
+
+class TestRoutingBudgetForecast(unittest.TestCase):
+    """The catalog-wide number, worked out before anything is scheduled."""
+
+    def test_the_bound_is_waves_of_the_timeout(self) -> None:
+        # 9 cases, 4 at a time, is 3 waves however unevenly the last one fills.
+        self.assertEqual(datasets.routing_worst_case_s(9, jobs=4, timeout=10), 30)
+        self.assertEqual(datasets.routing_worst_case_s(8, jobs=4, timeout=10), 20)
+        self.assertEqual(datasets.routing_worst_case_s(1, jobs=4, timeout=10), 10)
+
+    def test_no_cases_costs_nothing(self) -> None:
+        self.assertEqual(datasets.routing_worst_case_s(0), 0.0)
+
+    def test_the_concurrency_it_reports_actually_fits(self) -> None:
+        for cases in (1, 7, 46, 500):
+            with self.subTest(cases=cases):
+                jobs = datasets.routing_jobs_for_budget(cases)
+                self.assertLessEqual(
+                    datasets.routing_worst_case_s(cases, jobs), datasets.CATALOG_BUDGET_S
+                )
+
+    def test_zero_means_no_concurrency_would_do_it(self) -> None:
+        # A single case can outlast the budget on its own, so there is no
+        # number of workers to report.
+        self.assertEqual(
+            datasets.routing_jobs_for_budget(10, timeout=1000, budget_s=900), 0
+        )
+
+
 class TestRoutingClassification(unittest.TestCase):
     def test_verdicts(self) -> None:
         cases = [
@@ -599,6 +676,7 @@ class FakeAgent:
         self.seed = seed
         self.workspace: Path | None = None
         self.prompts: list[str] = []
+        self.timeouts: list[float | None] = []
         self._tmp: tempfile.TemporaryDirectory | None = None
 
     def __enter__(self) -> "FakeAgent":
@@ -613,8 +691,9 @@ class FakeAgent:
         if self._tmp is not None:
             self._tmp.cleanup()
 
-    def prompt(self, text: str):
+    def prompt(self, text: str, timeout: float | None = None):
         self.prompts.append(text)
+        self.timeouts.append(timeout)
         return agent.Run(workspace=self.workspace, events=self.events, judge_model=None)
 
 
@@ -695,7 +774,7 @@ class TestBehaviorCaseFlow(unittest.TestCase):
                 calls.append("teardown")
 
         class Exploding(FakeAgent):
-            def prompt(self, text):
+            def prompt(self, text, timeout=None):
                 raise RuntimeError("claude produced no output")
 
         cases, _ = parse(triggers(id="a", prompt="p", unexpected_behavior=["x"]))
@@ -720,6 +799,108 @@ class TestBehaviorCaseFlow(unittest.TestCase):
             skill="local-ai-app-integration",
         )
         self.assertTrue(outcome.passed, outcome.checks)
+
+
+class TestBehaviorBudget(unittest.TestCase):
+    """Time is the only cap on a catalog suite, so it has to actually bind."""
+
+    def cases(self, count: int) -> list:
+        parsed, errors = parse(
+            {
+                EVALUATIONS_KEY: [
+                    {"id": f"c{i}", TRIGGER_KEY: True, "prompt": "p", "logs_contain": ["x"]}
+                    for i in range(count)
+                ]
+            },
+            skill="local-ai-use",
+        )
+        self.assertEqual(errors, [])
+        return parsed
+
+    def run_budget(self, cases: list, budget_s: float, cost_s: float = 0.0):
+        """Run the budget loop with each case costing `cost_s` of real time."""
+        handed: list[float | None] = []
+
+        def fake_case(case, ctx, hooks, model, effort, timeout=None):
+            handed.append(timeout)
+            if cost_s:
+                time.sleep(cost_s)
+            return run_evals.BehaviorOutcome(
+                id=case.id, skill=case.skill or "", prompt=case.prompt,
+                passed=True, elapsed_s=cost_s,
+                checks=[
+                    {"kind": "logs_contain", "expectation": "x", "passed": True, "detail": ""}
+                ],
+            )
+
+        original = run_evals.run_behavior_case
+        run_evals.run_behavior_case = fake_case
+        try:
+            outcomes = run_evals.run_behavior(
+                ["local-ai-use"], cases, "opus", "high", budget_s
+            )
+        finally:
+            run_evals.run_behavior_case = original
+        return outcomes, handed
+
+    def test_cases_the_budget_never_reached_fail_and_name_the_other_file(self) -> None:
+        outcomes, handed = self.run_budget(self.cases(3), budget_s=1.0, cost_s=1.2)
+        self.assertEqual(len(handed), 1, "only the first case had budget to start")
+        self.assertEqual([o.passed for o in outcomes], [True, False, False])
+        for outcome in outcomes[1:]:
+            self.assertTrue(outcome.not_run)
+            self.assertIn(datasets.EXTENDED_DATASET_RELPATH.as_posix(), outcome.error)
+            self.assertEqual(outcome.checks, [])
+
+    def test_an_unreached_case_is_a_failure_not_a_silent_skip(self) -> None:
+        # Reported as passed-by-omission is how a suite stops testing the thing
+        # it was written for without anyone noticing.
+        outcomes, _ = self.run_budget(self.cases(3), budget_s=1.0, cost_s=1.2)
+        summary = run_evals.summarize_behavior(
+            outcomes, {"model": "opus", "effort": "high", "budget_s": 1.0}
+        )
+        self.assertEqual(summary["totals"]["cases"], 3)
+        self.assertEqual(summary["totals"]["passed"], 1)
+
+    def test_every_case_is_handed_what_is_left(self) -> None:
+        _, handed = self.run_budget(self.cases(3), budget_s=100.0)
+        self.assertEqual(len(handed), 3)
+        self.assertTrue(all(value is not None and value <= 100.0 for value in handed))
+        self.assertEqual(handed, sorted(handed, reverse=True))
+
+    def test_a_zero_budget_runs_everything_uncapped(self) -> None:
+        outcomes, handed = self.run_budget(self.cases(3), budget_s=0.0)
+        self.assertEqual(handed, [None, None, None])
+        self.assertTrue(all(o.passed for o in outcomes))
+
+    def test_a_case_cut_off_mid_run_says_where_the_limit_came_from(self) -> None:
+        class Slow(FakeAgent):
+            def prompt(self, text, timeout=None):
+                raise agent.CaseTimeout(42.0)
+
+        cases, _ = parse(
+            triggers(id="a", prompt="p", logs_contain=["x"]), skill="local-ai-use"
+        )
+        original = run_evals.claude
+        run_evals.claude = lambda model, *, skill, effort, seed=None: Slow(stream(), seed)
+        try:
+            outcome = run_evals.run_behavior_case(cases[0], {}, None, "opus", "high", 42.0)
+        finally:
+            run_evals.claude = original
+        self.assertFalse(outcome.passed)
+        self.assertIn("42s", outcome.error)
+        self.assertIn(datasets.EXTENDED_DATASET_RELPATH.as_posix(), outcome.error)
+
+    def test_the_budget_is_reported_so_a_breach_is_not_read_as_a_crash(self) -> None:
+        outcomes, _ = self.run_budget(self.cases(2), budget_s=1.0, cost_s=1.2)
+        report = run_evals.render_behavior_markdown(
+            run_evals.summarize_behavior(
+                outcomes,
+                {"model": "opus", "effort": "high", "budget_s": datasets.CATALOG_BUDGET_S},
+            )
+        )
+        self.assertIn(datasets.EXTENDED_DATASET_RELPATH.as_posix(), report)
+        self.assertIn("Seconds", report)
 
 
 class TestBehaviorReporting(unittest.TestCase):
@@ -809,6 +990,49 @@ class TestRoutingCaseSelection(unittest.TestCase):
     def test_an_empty_catalog_keeps_only_negatives(self) -> None:
         kept = datasets.routing_cases(self.cases("published"), [])
         self.assertEqual([c.id for c in kept], ["published-no"])
+
+
+class TestCiSelection(unittest.TestCase):
+    """What a change schedules. Wrong either way costs money or coverage."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        # CI runs this script; nothing else imports it, so load it by path.
+        path = datasets.REPO_ROOT / ".github" / "scripts" / "select_evals.py"
+        spec = importlib.util.spec_from_file_location("select_evals", path)
+        assert spec is not None and spec.loader is not None
+        cls.select = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.select)
+        cls.skill = datasets.skills_with_datasets()[0]
+
+    def path_in_skill(self, relpath: Path) -> str:
+        return f"skills/{self.skill}/{relpath.as_posix()}"
+
+    def test_an_extended_only_change_schedules_nothing(self) -> None:
+        # This repo never reads that file, so a behavior job for it would be a
+        # paid re-run of cases nobody touched.
+        changed = {self.path_in_skill(datasets.EXTENDED_DATASET_RELPATH)}
+        self.assertEqual(self.select.select_from_changes(changed), [])
+        self.assertFalse(self.select.routing_needed(changed))
+
+    def test_a_catalog_dataset_change_schedules_its_skill_and_routing(self) -> None:
+        changed = {self.path_in_skill(datasets.DATASET_RELPATH)}
+        self.assertEqual(self.select.select_from_changes(changed), [self.skill])
+        self.assertTrue(self.select.routing_needed(changed))
+
+    def test_the_exclusion_is_per_path_not_per_skill(self) -> None:
+        # Touching the extended file must not mask a real change beside it.
+        changed = {
+            self.path_in_skill(datasets.EXTENDED_DATASET_RELPATH),
+            f"skills/{self.skill}/SKILL.md",
+        }
+        self.assertEqual(self.select.select_from_changes(changed), [self.skill])
+
+    def test_the_forecast_reports_the_concurrency_that_would_fit(self) -> None:
+        forecast = self.select.routing_forecast(46, jobs=4)
+        self.assertEqual(forecast["cases"], 46)
+        self.assertEqual(forecast["budget_s"], datasets.CATALOG_BUDGET_S)
+        self.assertGreater(forecast["jobs_for_budget"], forecast["jobs"])
 
 
 if __name__ == "__main__":

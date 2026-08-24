@@ -38,7 +38,6 @@ import json
 import os
 import queue
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -49,8 +48,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agent import claude_env  # noqa: E402
-from datasets import SKILLS_DIR, Case  # noqa: E402
+from agent import claude_env, spawn_kwargs, terminate_process  # noqa: E402
+from datasets import ROUTING_TIMEOUT_S, SKILLS_DIR, Case  # noqa: E402
 
 # Tools that carry no routing signal. An agent often opens with a todo list or
 # a plan before deciding anything, and spending the non-skill tool budget on
@@ -77,7 +76,7 @@ class RoutingConfig:
 
     model: str = "opus"
     effort: str = "high"
-    timeout: float = 240.0
+    timeout: float = ROUTING_TIMEOUT_S
     max_tool_calls: int = 4
     max_inspection_calls: int = 8
     max_budget_usd: float = 0.75
@@ -354,36 +353,6 @@ def _pump(stream, sink: queue.Queue) -> None:
         sink.put(None)
 
 
-def _terminate(proc: subprocess.Popen) -> None:
-    """Kill the CLI and its children.
-
-    The `claude` process spawns helpers, so killing only the parent can leave
-    an orphan holding the API call open -- which is the cost this eval exists
-    to avoid. Kill the whole group/tree.
-    """
-    if proc.poll() is not None:
-        return
-    try:
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                capture_output=True,
-                check=False,
-            )
-        else:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (OSError, subprocess.SubprocessError):
-        pass
-    try:
-        proc.kill()
-    except OSError:
-        pass
-    try:
-        proc.wait(timeout=15)
-    except subprocess.TimeoutExpired:
-        pass
-
-
 def classify(expect: str | None, observed: str | None) -> str:
     if observed is None:
         return "true_negative" if expect is None else "missed_trigger"
@@ -424,12 +393,6 @@ def run_case(case: Case, skills: list[str], config: RoutingConfig) -> Outcome:
     if config.max_budget_usd > 0 and "--max-budget-usd" in config.available_flags:
         cmd += ["--max-budget-usd", str(config.max_budget_usd)]
 
-    spawn: dict = {}
-    if os.name == "nt":
-        spawn["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        spawn["start_new_session"] = True
-
     env = claude_env()
     if config_dir is not None:
         env["CLAUDE_CONFIG_DIR"] = str(config_dir)
@@ -457,7 +420,7 @@ def run_case(case: Case, skills: list[str], config: RoutingConfig) -> Outcome:
         errors="replace",
         bufsize=1,
         env=env,
-        **spawn,
+        **spawn_kwargs(),
     )
     try:
         assert proc.stdin is not None
@@ -527,7 +490,7 @@ def run_case(case: Case, skills: list[str], config: RoutingConfig) -> Outcome:
                 stop_reason = "tool_budget"
                 break
     finally:
-        _terminate(proc)
+        terminate_process(proc)
         elapsed = time.perf_counter() - start
         if config.keep_logs:
             logs_dir = Path(config.keep_logs)
@@ -687,6 +650,21 @@ def render_markdown(summary: dict) -> str:
             f"expecting an unpublished skill ({', '.join(f'`{s}`' for s in held_out)}) "
             f"are held out -- an uninstalled skill cannot win them. Their near "
             f"misses do run, since those assert that nothing fires.",
+            "",
+        ]
+
+    # Measured, not forecast. Behavior's budget is enforced per case because a
+    # skill owns its own suite; routing's is reported because no single pull
+    # request owns the catalog's case count, and the fix is concurrency rather
+    # than dropping prompts -- every prompt here is some other skill's negative.
+    budget_s = meta.get("budget_s") or 0
+    wall_s = meta.get("wall_time_s") or 0
+    if budget_s and wall_s > budget_s:
+        lines += [
+            f"> **Over budget:** {wall_s / 60:.1f} minutes against a "
+            f"{budget_s / 60:.0f}-minute budget, for {totals['cases']} prompts at "
+            f"`--jobs {meta.get('jobs', '?')}`. Raise the concurrency rather than "
+            f"thinning the dataset.",
             "",
         ]
     lines += [

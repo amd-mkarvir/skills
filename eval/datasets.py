@@ -51,6 +51,15 @@ file a prompt lives in already carry the distinction:
   * an evaluation in the shared pool             -> ``unrelated`` (belongs to
     no skill's domain)
 
+A skill's suite can be larger than what this catalog runs. As skills come to
+be owned by the product repos that ship them, the expensive end of their
+testing runs there, on their hardware, with a shared copy of this harness --
+and it is written down in a second file, ``EXTENDED_DATASET_RELPATH``, which
+nothing here reads. What that leaves in ``evals.json`` is the catalog
+contract: every routing prompt, because routing is only meaningful against the
+whole bundle and only this repo can install it, plus whatever behavior fits
+``CATALOG_BUDGET_S``.
+
 Stdlib only, so the runner needs no ``pip install``. ``machine_plan`` is the
 one exception and imports PyYAML lazily; nothing on the run path calls it.
 """
@@ -58,6 +67,7 @@ one exception and imports PyYAML lazily; nothing on the run path calls it.
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,6 +84,23 @@ CLAUDE_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 DATASET_RELPATH = Path("evals") / "evals.json"
 HOOKS_RELPATH = Path("evals") / "hooks.py"
 MACHINE_RELPATH = Path("evals") / "machine.yml"
+
+# The other half of a federated skill's suite, and the one file in an evals
+# directory this repo never reads. A product repo owns its skill and runs the
+# expensive end of its own tests on its own CI with a shared copy of this
+# harness; what lands here is the catalog contract, in DATASET_RELPATH.
+#
+# The filename is the entire declaration of where a case runs -- no `scope`
+# field, no manifest, nothing for an owner to classify -- which is the same
+# move the folder already makes for skill identity. Moving a case between the
+# two files is how a suite is rebalanced, and the two hold the same shape so
+# the move needs no edit to the case itself.
+#
+# It arrives for free, because the importer copies each skill folder wholesale,
+# and it is named here so the parts that must skip it can say what they are
+# skipping: CI change detection above all, which would otherwise schedule a
+# paid behavior run for a file nothing reads.
+EXTENDED_DATASET_RELPATH = Path("evals") / "extended_evals.json"
 
 # Prompts that belong to no skill's domain. They are the "unrelated" control
 # group for every skill at once, so they live centrally instead of being
@@ -110,6 +137,25 @@ RUNNER_TYPES = {
 }
 DEFAULT_RUNNER_TYPE = "default"
 MACHINE_KEYS = {"os", "runner_type"}
+
+# The wall-clock budget one suite gets, and the reason a catalog dataset stays
+# small without anyone counting cases. It is deliberately a *per-skill* number:
+# behavior runs as one matrix leg per skill, so a new skill adds a leg on
+# another runner rather than minutes to an existing one, and the budget keeps
+# meaning the same thing however far federation goes.
+#
+# A suite that outgrows this has cases to move to EXTENDED_DATASET_RELPATH; it
+# does not have a case for a longer budget. Enforced by the runner rather than
+# by counting cases up front, because what costs time is how long a case takes,
+# which no field in the dataset knows.
+CATALOG_BUDGET_S = 15 * 60
+
+# Routing's share of the same budget, plus the two knobs that decide whether it
+# can be met. These live here rather than only in the runner's argparse because
+# CI forecasts the number before it schedules anything, and a default that
+# disagreed with the forecast would make the forecast fiction.
+ROUTING_JOBS = 4
+ROUTING_TIMEOUT_S = 240.0
 
 # Tier 0, the bar every skill clears before it can ship. Cheap to meet (five
 # prompts, no hardware, no assertions) and enforced structurally so a thin
@@ -279,6 +325,52 @@ def routing_cases(cases: list[Case], catalog: list[str]) -> list[Case]:
     """
     installed = set(catalog)
     return [case for case in cases if case.expect_skill is None or case.expect_skill in installed]
+
+
+def routing_worst_case_s(
+    cases: int, jobs: int = ROUTING_JOBS, timeout: float = ROUTING_TIMEOUT_S
+) -> float:
+    """The longest a routing run of `cases` can take.
+
+    Cases run `jobs` at a time and each is abandoned at `timeout`, so the run
+    is bounded by how many waves it takes. Real cases finish far sooner --
+    every one is killed the moment its routing decision is observable -- but
+    the bound is the only number a budget can be checked against before the
+    run, and it is the one that grows as federation adds skills.
+
+    That growth is worth being explicit about, because the obvious mitigation
+    does not work: keeping the *published* catalog small bounds how many
+    prompts expect a skill, but ``routing_cases`` deliberately keeps an
+    unpublished skill's near misses, since those assert that nothing fires.
+    Every imported skill therefore adds at least ``MIN_NEGATIVE_CASES`` to this
+    count whether or not it ever ships. Raising `jobs` is the lever; asking
+    owners to write fewer cheap prompts is not.
+    """
+    if cases <= 0:
+        return 0.0
+    return math.ceil(cases / max(1, jobs)) * timeout
+
+
+def routing_jobs_for_budget(
+    cases: int, timeout: float = ROUTING_TIMEOUT_S, budget_s: float = CATALOG_BUDGET_S
+) -> int:
+    """Concurrency that would fit `cases` inside `budget_s` in the worst case.
+
+    The counterpart to ``routing_worst_case_s``, and the reason that bound is
+    reported rather than enforced: when routing outgrows its budget the fix is
+    this number, not a smaller dataset. Cheap prompts are the coverage -- one
+    skill's positive is every other skill's negative -- so trading them away to
+    save a job slot is the wrong direction.
+
+    Returns 0 when no concurrency would do it, which means `timeout` alone
+    exceeds the budget and a single hung case could blow it.
+    """
+    waves = math.floor(budget_s / timeout) if timeout > 0 else 0
+    if cases <= 0:
+        return 1
+    if waves <= 0:
+        return 0
+    return math.ceil(cases / waves)
 
 
 def _parse_case(entry: object, skill: str | None, label: str, errors: list[str]) -> Case | None:

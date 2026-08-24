@@ -9,6 +9,8 @@ Emits one JSON object on stdout::
 
     {
       "routing": true,
+      "routing_forecast": {"cases": 40, "jobs": 4, "worst_case_s": 2400,
+                           "jobs_for_budget": 14, "budget_s": 900},
       "default": [
         {"skill": "local-ai-use", "os": "Linux",
          "runner": "[\\"self-hosted\\",\\"strix_halo\\",\\"Linux\\"]", "gate": ""}
@@ -34,6 +36,16 @@ The split is by credentials, not by hardware: a runner class with its own
 ``environment`` reads that environment's scoped secrets, and one without uses
 the repo-wide key for AMD's internal gateway. They are separate jobs because a
 job's credentials have to be fixed before its matrix expands.
+
+``routing_forecast`` is the one number no single change is responsible for.
+Routing pools every skill's prompts into one job, so its size is the catalog's,
+and it grows with each imported skill whether or not that skill is ever
+published. Forecasting it here -- for free, before any runner is claimed --
+keeps "the catalog is small enough to fit the budget" a checked assumption.
+
+A change confined to a skill's ``evals/extended_evals.json`` selects nothing:
+this repo never runs that file, so scheduling a behavior job for it would buy
+a paid run of the cases that did not change.
 
 ``skipped`` holds legs whose gate label is missing from the pull request. A
 gate comes with the runner class -- the Instinct pool always requires
@@ -77,6 +89,13 @@ INFRA_FILES = {
     # so it re-scores the whole catalog rather than just the skill it names.
     ".claude-plugin/marketplace.json",
 }
+
+# The half of a skill's suite this repo never runs. Editing it moves no number
+# here, so it must not schedule a paid behavior job: the point of the file is
+# that those tests run on the CI of the repo that owns the skill.
+# ``routing_needed`` already ignores it, by matching the catalog dataset's exact
+# path rather than any dataset-shaped name.
+EXTENDED_SUFFIX = "/" + datasets.EXTENDED_DATASET_RELPATH.as_posix()
 
 
 def has_behavior_cases(skill: str) -> bool:
@@ -145,9 +164,33 @@ def select_from_changes(changed: set[str]) -> list[str]:
     selected = {
         path.split("/")[1]
         for path in changed
-        if path.startswith("skills/") and len(path.split("/")) >= 2
+        if path.startswith("skills/")
+        and len(path.split("/")) >= 2
+        and not path.endswith(EXTENDED_SUFFIX)
     }
     return [skill for skill in datasets.skills_with_datasets() if skill in selected]
+
+
+def routing_forecast(cases: int, jobs: int = datasets.ROUTING_JOBS) -> dict:
+    """Routing's size and shape, before anything runs.
+
+    Routing is the one job whose size is the whole catalog's, so it is the one
+    that stops fitting without any single change looking responsible. Working
+    it out here is free and keeps "the catalog is small enough" an assumption
+    somebody is told about, rather than one that expires into a mystery timeout.
+
+    Reported, never a warning: the bound assumes every case runs to its
+    timeout, which takes all of them hanging at once, so a run that flagged it
+    each time would be teaching people to ignore it. ``jobs_for_budget`` is the
+    number to act on, and the routing job checks the time it actually took.
+    """
+    return {
+        "cases": cases,
+        "jobs": jobs,
+        "worst_case_s": round(datasets.routing_worst_case_s(cases, jobs)),
+        "jobs_for_budget": datasets.routing_jobs_for_budget(cases),
+        "budget_s": datasets.CATALOG_BUDGET_S,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -191,10 +234,15 @@ def main(argv: list[str] | None = None) -> int:
     labels = {token.strip() for token in args.labels.split(",") if token.strip()}
     include, skipped = matrix_entries(skills, labels, ignore_gates=args.ignore_gates)
 
+    graded = datasets.routing_cases(
+        datasets.load_all_cases(), datasets.routing_catalog()
+    )
+
     print(
         json.dumps(
             {
                 "routing": routing,
+                "routing_forecast": routing_forecast(len(graded)),
                 "default": [leg for leg in include if "environment" not in leg],
                 "scoped": [leg for leg in include if "environment" in leg],
                 "skipped": skipped,
