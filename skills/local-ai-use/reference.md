@@ -225,21 +225,13 @@ read `examples/lemonade_tools.py` in the upstream lemonade-sdk repo.
 Lemonade can run on another machine (a workstation with a Ryzen AI NPU,
 say) while the agent runs on the laptop. To point this skill at it:
 
-1. Find the remote endpoint with `lemonade scan --duration 5`, which listens
-   for the UDP beacons Lemonade servers broadcast on the local network and
-   prints each one as `<hostname> at http://<ip>:<port>/api/v1/`:
-
-```
-Scan complete. Found 2 beacon(s):
-  - workstation at http://192.168.0.233:13305/api/v1/
-  - my-laptop at http://127.0.0.1:13305/api/v1/
-```
-
-2. Set `LEMONADE_HOST` and `LEMONADE_PORT` to the host and port from the
-   beacon you want (or pass `--host` / `--port` to `setup_local_ai.py`). Set
-   **both**: the script otherwise discovers the port via `lemonade status`,
-   which speaks only for the service on this machine, so a remote host given
-   without a port falls back to 13305.
+1. Find it with `lemonade scan --duration 5`, which lists the UDP beacons
+   Lemonade servers broadcast on the local network as
+   `<hostname> at http://<ip>:<port>/api/v1/`.
+2. Set `LEMONADE_HOST` and `LEMONADE_PORT` from that beacon (or pass
+   `--host` / `--port` to `setup_local_ai.py`). Set **both**: the script
+   otherwise discovers the port via `lemonade status`, which speaks only for
+   the service on this machine, so a remote host alone keeps port 13305.
 3. Re-run `python scripts/setup_local_ai.py` so the rule block is rewritten
    with the new endpoint baked in.
 4. Make sure the remote server is bound to a non-loopback interface
@@ -247,10 +239,9 @@ Scan complete. Found 2 beacon(s):
    inbound 13305. Setting `host` to `0.0.0.0` exposes the server; pair it
    with `LEMONADE_API_KEY` so it isn't open to the LAN.
 
-A server that `scan` cannot see is not necessarily down: beacons are UDP, are
-only broadcast on RFC1918 (private) networks, and can be switched off with
-`--no-broadcast` or `lemonade config set no_broadcast=true`. Fall back to
-asking the user for the host and port in that case.
+A server `scan` cannot see is not necessarily down: beacons are UDP, only go
+out on RFC1918 networks, and can be disabled (`--no-broadcast`). Ask the user
+for the host and port in that case.
 
 ---
 

@@ -33,10 +33,9 @@ The skill does three things:
    by the OS — so the setup script waits for the service and, if it stays down,
    prints the exact OS-specific command to start it (e.g. `sudo systemctl start
    lemond` on Linux).
-2. **Verifies that local Lemonade is reachable**, at the endpoint the service
-   actually bound. The port comes from `lemonade status`, so a server that
-   already runs on a non-default port is used as-is instead of being reported
-   missing; `http://localhost:13305` is only the fallback default.
+2. **Verifies that local Lemonade is reachable** on the port `lemonade status`
+   reports, so a server already running on a non-default port is used as-is
+   rather than reported missing (`13305` is only the fallback).
 3. **Drops a `Local AI Use` block into the workspace `AGENTS.md`** so the agent
    reads the routing rule on every later turn, in Cursor, Claude Code, Codex,
    Gemini CLI, and any other agent that respects `AGENTS.md`.
@@ -167,9 +166,9 @@ is added to the *user* PATH (new shells only); the setup script probes that
 directory so it works in the same run.
 
 **1b. Is the service running, and where?** Check `lemonade status --json`,
-which answers both questions at once: it prints the bound port
-(`{"port": 13305}`). The `lemond` service auto-starts on install — there is
-**no** `lemonade serve` in modern Lemonade.
+which answers both at once by printing the bound port (`{"port": 13305}`). The
+`lemond` service auto-starts on install — there is **no** `lemonade serve` in
+modern Lemonade.
 
 | `lemonade status` says | Action |
 |---|---|
@@ -177,35 +176,24 @@ which answers both questions at once: it prints the bound port
 | `Server is not running` | Wait a few seconds for the auto-started service (the script polls `/api/v1/health`, re-asking `status` in case the service comes up on a different port). If it stays down, start it via the OS service manager: `sudo systemctl start lemond` (Linux system install) or `systemctl --user start lemond` (per-user install); `launchctl load /Library/LaunchDaemons/com.lemonade.server.plist` (macOS); the Lemonade tray app or `Start-Service lemond` (Windows). |
 
 Never treat 13305 as the definition of "running": the port is a config value
-(`lemonade config set port`), and an existing config, a different install
-channel, or a port conflict all move it. Probing only the default reports a
-perfectly healthy server as missing.
-
-`status` is the right way to ask, because the CLI already does the discovery
-for you: a running service broadcasts a UDP beacon announcing its API URL, and
-the CLI listens for that beacon (enabled by default, `--no-discovery` to opt
-out) before falling back to the default port. Do not run `lemonade scan` to
-pick the local endpoint — it reports beacons from Lemonade servers on other
-machines on the LAN too, and routing this workspace at a colleague's server is
-exactly the failure this skill exists to prevent. Use `scan` only when the user
-deliberately wants a remote server (see
-[reference.md](reference.md#re-pointing-the-rule-at-a-remote-host)).
-
-The setup script resolves the endpoint in
-this order — `--host` / `--port`, then `LEMONADE_HOST` / `LEMONADE_PORT`, then
-`lemonade status`, then the install default — and bakes whatever it settles on
-into the rule. Pass `--port` explicitly only to override discovery, and pass it
-together with `--host` when pointing at another machine, since the local CLI
-cannot report a remote service's port.
+(`lemonade config set port`) that an existing config, another install channel,
+or a port conflict all move, so probing only the default reports a healthy
+server as missing. Ask `status`, which resolves the port from the service's UDP
+beacon for you — `lemonade scan` is for finding servers on *other* machines
+(see [reference.md](reference.md#re-pointing-the-rule-at-a-remote-host)), never
+for picking the local endpoint. The setup script prefers `--host` / `--port` or
+`LEMONADE_HOST` / `LEMONADE_PORT` over discovery, and bakes whatever it settles
+on into the rule; pass both when pointing at another machine, since the CLI
+here cannot report a remote service's port.
 
 Only if the automatic install genuinely fails (no `apt-get`, no `sudo`,
 download blocked) should you stop and point the user at
 <https://lemonade-server.ai/docs/guide/install/>.
 
 The rest of this skill writes the endpoint as `http://localhost:13305/api/v1`,
-the default; substitute the port `lemonade status` reported if it differs. It
-also assumes no API key is required (the system-wide server defaults to no auth
-on loopback). If the user has set `LEMONADE_API_KEY`, the routing rule template
+the default; substitute the port `status` reported if it differs. It also
+assumes no API key is required (the system-wide server defaults to no auth on
+loopback). If the user has set `LEMONADE_API_KEY`, the routing rule template
 in `templates/local-ai-rule.md` shows where to add the `Authorization` header.
 
 **1c. Are the backends ready per modality?** Backend health is **per
