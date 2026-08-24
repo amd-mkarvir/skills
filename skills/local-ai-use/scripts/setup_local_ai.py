@@ -12,13 +12,15 @@
 Performs the setup steps from SKILL.md:
 
   1. Ensures modern Lemonade is installed and its background service (the
-     `lemond` daemon) is reachable on http://localhost:13305 (override with
-     --host / --port or LEMONADE_HOST / LEMONADE_PORT). If no modern
-     `lemonade` CLI is found, the latest version is installed on the user's
-     behalf. The daemon auto-starts on install and is managed by the OS
-     service manager, so this script never runs a `serve` command; it waits
-     for the service to come up and, if it does not, prints the OS-specific
-     start command and exits non-zero.
+     `lemond` daemon) is reachable. The endpoint is whatever the user asks
+     for (--host / --port or LEMONADE_HOST / LEMONADE_PORT), else whatever
+     `lemonade status` reports the service actually bound, else the install
+     default http://localhost:13305. If no modern `lemonade` CLI is found,
+     the latest version is installed on the user's behalf. The daemon
+     auto-starts on install and is managed by the OS service manager, so this
+     script never runs a `serve` command; it waits for the service to come up
+     and, if it does not, prints the OS-specific start command and exits
+     non-zero.
   2. Writes the routing rule from `templates/local-ai-rule.md` into
      <workspace>/AGENTS.md, between stable BEGIN/END markers so re-runs
      replace the block in place rather than appending.
@@ -59,9 +61,29 @@ from pathlib import Path
 
 # Defaults match the system-wide Lemonade Server install. Both the CLI
 # (LEMONADE_HOST / LEMONADE_PORT) and the OpenAI-compatible HTTP endpoints
-# bind to these by default.
+# bind to these by default. They are only a last resort: the service binds
+# whatever its own config says, so `lemonade status` is asked first (see
+# resolve_endpoint).
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 13305
+
+# Hosts that mean "the Lemonade service on this machine". Only for those is
+# the local CLI authoritative about the port; a user-supplied remote host has
+# its own service and its own config, which `lemonade status` here cannot see.
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "::"}
+
+# A service bound to a wildcard address is reached over loopback, not by
+# connecting to the wildcard itself.
+WILDCARD_HOSTS = {"0.0.0.0", "::"}
+
+# Human-readable `lemonade status` says "Server is running on port 13305";
+# `status --json` says {"port": 13305}. Anchoring on "running on" keeps this
+# off the other ports the same output lists (e.g. "WebSocket Port 9001"), and
+# the optional URL form covers builds that print "running on http://host:port".
+STATUS_TEXT_ENDPOINT_RE = re.compile(
+    r"running\s+on\s+(?:https?://(?P<host>[^\s:/]+):)?(?:port\s+)?(?P<port>\d{2,5})",
+    re.IGNORECASE,
+)
 
 # Picked because each default fits in under ~5 GB and runs on commodity CPU
 # hardware, so the savings vs. cloud calls are real on a typical developer
@@ -172,6 +194,22 @@ def _candidate_clis() -> list[str]:
     return candidates
 
 
+def _run_status(cli: str, *, as_json: bool = False) -> tuple[str, str] | None:
+    """Run `<cli> status` and return (stdout, stderr), or None if it did not run.
+
+    `status` is read-only and cheap, which is why it doubles as the modern-CLI
+    probe and the endpoint lookup.
+    """
+    cmd = [cli, "status"]
+    if as_json:
+        cmd.append("--json")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout, result.stderr
+
+
 def is_modern_cli(cli: str) -> bool:
     """True if `cli` is the modern Lemonade CLI (drives the `lemond` service).
 
@@ -186,21 +224,118 @@ def is_modern_cli(cli: str) -> bool:
     (exiting 0 or 1 accordingly). We key off that phrasing rather than the
     exit code alone.
     """
-    try:
-        result = subprocess.run(
-            [cli, "status"],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-    except (OSError, subprocess.SubprocessError):
+    streams = _run_status(cli)
+    if streams is None:
         return False
-    blob = f"{result.stdout}\n{result.stderr}".lower()
+    blob = "\n".join(streams).lower()
     # Modern `lemonade status` always reports on the server, whether or not it
     # is running. An old/incompatible CLI never prints this phrasing (it errors
     # with "invalid choice: 'status'"), so the presence of the phrase is a
     # positive, unambiguous signal that this is the modern CLI.
     return "server is running" in blob or "server is not running" in blob
+
+
+def _valid_port(value: object) -> int | None:
+    """Coerce a reported port to an int, or None if it is not a usable port."""
+    try:
+        port = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return port if 1 <= port <= 65535 else None
+
+
+def _connectable_host(host: str | None) -> str | None:
+    """Normalise a reported bind address into one we can actually connect to."""
+    if not host:
+        return None
+    return DEFAULT_HOST if host.lower() in WILDCARD_HOSTS else host
+
+
+def _parse_status_json(stdout: str) -> tuple[str | None, int | None]:
+    """Pull host/port out of `status --json` output (today: `{"port": 13305}`)."""
+    try:
+        data = json.loads(stdout.strip() or "{}")
+    except ValueError:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    host = data.get("host")
+    return (
+        _connectable_host(host if isinstance(host, str) else None),
+        _valid_port(data.get("port")),
+    )
+
+
+def discover_endpoint(cli: str) -> tuple[str | None, int | None]:
+    """Ask the CLI where the service is actually bound.
+
+    The port is a config value (`lemonade config set port`), and an existing
+    install, a different install channel, or a port conflict can all move it.
+    Treating DEFAULT_PORT as the definition of "reachable" makes a healthy
+    server on any other port look absent, so ask instead of assuming.
+
+    Asking the CLI *is* the beacon route: the running service broadcasts a UDP
+    beacon announcing its API URL, and the CLI listens for it (discovery is on
+    by default) before falling back to the default port. So one `status` call
+    gets us the beacon's answer, already resolved, with no scan window. Do not
+    replace this with `lemonade scan` or a UDP listener of our own: beacons
+    also arrive from Lemonade servers on other machines on the LAN, and this
+    skill must route to the user's own machine.
+
+    `status --json` is authoritative; the human-readable output is the
+    fallback for builds where `--json` is missing or reshaped. Returns
+    ``(host, port)`` with either element None when the CLI does not report it
+    -- a stopped service prints "Server is not running" and no port.
+    """
+    host: str | None = None
+    port: int | None = None
+
+    streams = _run_status(cli, as_json=True)
+    if streams is not None:
+        host, port = _parse_status_json(streams[0])
+
+    if port is None:
+        streams = _run_status(cli)
+        if streams is not None:
+            match = STATUS_TEXT_ENDPOINT_RE.search("\n".join(streams))
+            if match is not None:
+                host = host or _connectable_host(match.group("host"))
+                port = _valid_port(match.group("port"))
+
+    return host, port
+
+
+def is_local_host(host: str) -> bool:
+    """True if `host` names the Lemonade service on this machine."""
+    return host.lower() in LOCAL_HOSTS
+
+
+def resolve_endpoint(
+    cli: str | None,
+    host_arg: str | None,
+    port_arg: int | None,
+) -> tuple[str, int, str]:
+    """Pick the endpoint to health-check, and say where the answer came from.
+
+    Precedence: what the user asked for (--host / --port, or the matching env
+    vars), then what `lemonade status` reports, then the install default. The
+    middle step is what stops a server on a non-default port from reading as
+    "not running".
+    """
+    if port_arg is None and cli is not None and is_local_host(host_arg or DEFAULT_HOST):
+        discovered_host, discovered_port = discover_endpoint(cli)
+        if discovered_port is not None:
+            return (
+                host_arg or discovered_host or DEFAULT_HOST,
+                discovered_port,
+                f"`{CLI_NAME} status`",
+            )
+    requested = host_arg is not None or port_arg is not None
+    return (
+        host_arg or DEFAULT_HOST,
+        port_arg if port_arg is not None else DEFAULT_PORT,
+        "the requested endpoint" if requested else "the install default",
+    )
 
 
 def find_cli() -> tuple[str | None, str | None]:
@@ -380,14 +515,32 @@ def uninstall_hint() -> str:
     return f"remove it with your platform's package manager; see {INSTALL_DOCS_URL}"
 
 
-def wait_for_server(host: str, port: int, timeout_s: float = 90.0) -> bool:
-    """Poll /api/v1/health until it answers 200 or we hit the timeout."""
+def wait_for_server(
+    host: str,
+    port: int,
+    *,
+    cli: str | None = None,
+    timeout_s: float = 90.0,
+) -> tuple[bool, str, int]:
+    """Poll /api/v1/health until it answers 200 or we hit the timeout.
+
+    Returns ``(reachable, host, port)``. When `cli` is given the bound port is
+    re-checked on every pass, because a service that is still starting has no
+    port to report yet and may come up on one other than our first guess.
+    """
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         if check_server_reachable(host, port):
-            return True
+            return True, host, port
+        if cli is not None:
+            discovered_host, discovered_port = discover_endpoint(cli)
+            host = discovered_host or host
+            if discovered_port is not None and discovered_port != port:
+                _print(f"`{CLI_NAME} status` reports port {discovered_port}; checking there.")
+                port = discovered_port
+                continue
         time.sleep(2.0)
-    return False
+    return False, host, port
 
 
 def check_server_reachable(host: str, port: int) -> bool:
@@ -498,6 +651,25 @@ def upsert_agents_md(
     return target
 
 
+def _env_port() -> int | None:
+    """LEMONADE_PORT as an int, dropping an unusable value from the environment.
+
+    The `lemonade` CLI reads the same variable and refuses to start on a value
+    it cannot parse ("Could not convert: --port = ..."). Leaving such a value
+    in the environment our subprocesses inherit would turn a typo into a
+    misdiagnosed stale CLI, so an unusable value is removed here, once, before
+    anything shells out.
+    """
+    raw = os.environ.get("LEMONADE_PORT")
+    if not raw:
+        return None
+    port = _valid_port(raw)
+    if port is None:
+        _print(f"ignoring LEMONADE_PORT={raw!r}: not a port number.")
+        os.environ.pop("LEMONADE_PORT", None)
+    return port
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -508,14 +680,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--host",
-        default=os.environ.get("LEMONADE_HOST", DEFAULT_HOST),
-        help="Lemonade Server host (default: 127.0.0.1 / $LEMONADE_HOST).",
+        default=None,
+        help="Lemonade Server host (default: $LEMONADE_HOST, else 127.0.0.1).",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.environ.get("LEMONADE_PORT", str(DEFAULT_PORT))),
-        help="Lemonade Server port (default: 13305 / $LEMONADE_PORT).",
+        default=None,
+        help=(
+            "Lemonade Server port (default: $LEMONADE_PORT, else the port "
+            f"`{CLI_NAME} status` reports, else {DEFAULT_PORT})."
+        ),
     )
     parser.add_argument(
         "--image-model",
@@ -538,6 +713,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Do not auto-install Lemonade; just report and exit non-zero if the CLI or service is missing.",
     )
     args = parser.parse_args(argv)
+
+    # Read the endpoint request before shelling out: the CLI inherits these
+    # env vars, so an unusable one has to be dealt with first.
+    host_arg = args.host or os.environ.get("LEMONADE_HOST") or None
+    port_arg = args.port if args.port is not None else _env_port()
 
     cli, stale = find_cli()
 
@@ -578,34 +758,44 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     _print(f"using Lemonade CLI: {cli}")
 
+    # Ask the service where it bound before assuming the default port; an
+    # existing config or a port conflict moves it, and a "not running" verdict
+    # from the wrong port would be baked into the rule as well.
+    host, port, source = resolve_endpoint(cli, host_arg, port_arg)
+    _print(f"endpoint http://{host}:{port} (from {source})")
+
+    # Only a local CLI can correct a port we did not pin ourselves.
+    rediscover_with = cli if port_arg is None and is_local_host(host) else None
+
     # Modern Lemonade auto-starts the `lemond` service on install; there is no
     # `lemonade serve`. If it is not up yet (e.g. still starting right after a
     # fresh install), poll briefly, then guide the user to start the OS
     # service rather than trying to spawn it ourselves.
-    if not check_server_reachable(args.host, args.port):
+    if not check_server_reachable(host, port):
         if args.no_install:
             _print(
                 f"FAIL: Lemonade Server is not responding at "
-                f"http://{args.host}:{args.port}/api/v1/health (--no-install set)."
+                f"http://{host}:{port}/api/v1/health (--no-install set)."
             )
             _print(f"Start the service: {service_start_hint()}")
             return 3
         _print("Lemonade service not reachable yet; waiting for it to come up.")
-        if not wait_for_server(args.host, args.port):
+        reachable, host, port = wait_for_server(host, port, cli=rediscover_with)
+        if not reachable:
             _print(
                 f"FAIL: the Lemonade service did not become reachable at "
-                f"http://{args.host}:{args.port}/api/v1/health."
+                f"http://{host}:{port}/api/v1/health."
             )
             _print(f"Start it manually, then re-run: {service_start_hint()}")
             _print(f"If it is not installed, see {INSTALL_DOCS_URL}")
             return 3
 
-    _print(f"server reachable at http://{args.host}:{args.port}")
+    _print(f"server reachable at http://{host}:{port}")
 
     upsert_agents_md(
         args.workspace.resolve(),
-        host=args.host,
-        port=args.port,
+        host=host,
+        port=port,
         image_model=args.image_model,
         tts_model=args.tts_model,
         stt_model=args.stt_model,
