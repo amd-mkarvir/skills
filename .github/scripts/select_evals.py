@@ -86,8 +86,9 @@ INFRA_FILES = {
     "eval/negatives.json",
     ".github/scripts/select_evals.py",
     ".github/workflows/evals.yml",
-    # Publishing or unpublishing a skill changes who competes for every prompt,
-    # so it re-scores the whole catalog rather than just the skill it names.
+}
+
+ROUTING_INPUTS = {
     ".claude-plugin/marketplace.json",
 }
 
@@ -144,7 +145,7 @@ def routing_needed(changed: set[str], extended: bool = True) -> bool:
     against the skills that are. An extended dataset counts only where it runs:
     editing prompts this repo never grades should not buy a catalog-wide run.
     """
-    if changed & INFRA_FILES:
+    if changed & (INFRA_FILES | ROUTING_INPUTS):
         return True
     published = set(datasets.routing_catalog())
     for path in changed:
