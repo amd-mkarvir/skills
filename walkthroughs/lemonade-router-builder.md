@@ -77,6 +77,8 @@ the full per-condition trace.
 
 ## Step 5 - Try a PII privacy router
 
+On a new Claude session, run:
+
 ```
 Any message containing a Social Security number or email address must stay on <SMALL_MODEL>. Everything else can go to <CLOUD_MODEL>.
 
@@ -85,9 +87,19 @@ Example: Any message containing a Social Security number or email address must s
 
 The agent should produce a rules-mode policy with two `regex` conditions and
 place the PII rule first. Validate by sending a test message with a fake SSN
-(`123-45-6789`) and confirming the header shows `pii-stays-local`.
+(`123-45-6789`) and confirming the header shows that rule's id - expect the
+default `rule-1` unless you asked the agent to name it something else.
+
+If Claude refuses to send a test message containing a fake SSN, drop the SSN
+condition and test with the email address only instead:
+
+```
+Any message containing an email address must stay on <SMALL_MODEL>. Everything else can go to <CLOUD_MODEL>.
+```
 
 ## Step 6 - Try an LLM-as-router (intent-only)
+
+On a new Claude session, run:
 
 ```
 I want sensitive queries to stay on <LARGE_MODEL> and everything else to go to <CLOUD_MODEL>. Use the local model as the router.

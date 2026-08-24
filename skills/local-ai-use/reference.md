@@ -104,8 +104,11 @@ Notable per-endpoint quirks:
   `/v1/models/{id}` are the right values to use as your defaults.
 - **`/v1/images/edits`**: `multipart/form-data` (not JSON). `mask` is
   optional; without one the entire image is the editable region.
-- **`/v1/audio/transcriptions`**: only `wav` input and `json` response are
-  supported today. Non-WAV input must be re-encoded with `ffmpeg`.
+- **`/v1/audio/transcriptions`**: only `wav` input is supported; re-encode
+  anything else with `ffmpeg`. `response_format` accepts `json`,
+  `verbose_json`, `text`, `srt`, and `vtt` — the first two return JSON, the
+  rest return a raw text body (as of Lemonade 11.7.0). Any other value is a
+  400.
 - **`/v1/audio/speech`**: `mp3`, `wav`, `opus`, and `pcm` outputs supported.
   Streaming requires `stream_format: "audio"`, which only emits `pcm`.
 
