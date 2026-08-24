@@ -61,7 +61,8 @@ curl -sX POST {{LEMONADE_BASE_URL}}/audio/speech \
   -o out.mp3
 ```
 
-**Speech-to-text** (returns JSON `{"text": "..."}`):
+**Speech-to-text** (returns JSON `{"text": "..."}`; add
+`-F "response_format=text"` for a raw text body instead):
 
 ```bash
 ffmpeg -y -i INPUT_AUDIO -ar 16000 -ac 1 _stt.wav

@@ -171,9 +171,8 @@ in `templates/local-ai-rule.md` shows where to add the `Authorization` header.
 ### Default modality models (pulled on first use, not during setup)
 
 Setup does **not** download these. The installed rule pulls each one the first
-time that modality is requested. They are the **Lite Collection** defaults from
-Lemonade OmniRouter, sized to keep token-and-cost savings real on commodity
-hardware:
+time that modality is requested. They are the smallest models Lemonade offers
+per modality, sized to keep token-and-cost savings real on commodity hardware:
 
 | Modality | Model | Size | Why this default |
 |---|---|---|---|

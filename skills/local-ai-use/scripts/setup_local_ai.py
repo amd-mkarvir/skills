@@ -63,10 +63,9 @@ from pathlib import Path
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 13305
 
-# The Lite Collection from Lemonade OmniRouter. Picked because each default
-# fits in under ~5 GB and runs on commodity CPU hardware, so the savings vs.
-# cloud calls are real on a typical developer laptop. See SKILL.md for upgrade
-# paths.
+# Picked because each default fits in under ~5 GB and runs on commodity CPU
+# hardware, so the savings vs. cloud calls are real on a typical developer
+# laptop. See SKILL.md for upgrade paths.
 DEFAULT_IMAGE_MODEL = "SD-Turbo"
 DEFAULT_TTS_MODEL = "kokoro-v1"
 DEFAULT_STT_MODEL = "Whisper-Tiny"
