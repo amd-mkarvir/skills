@@ -404,4 +404,4 @@ a config shape, compare performance before correctness, or omit the structured
 reports needed for review.
 
 For the complete command and configuration reference, read the
-[`magpie-kernel-evaluator` skill](../skills/magpie-kernel-evaluator/SKILL.md).
+[`magpie-kernel-evaluator` skill](https://github.com/amd/skills/blob/main/skills/magpie-kernel-evaluator/SKILL.md).

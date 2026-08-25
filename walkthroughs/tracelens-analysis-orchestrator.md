@@ -228,8 +228,8 @@ length, token usage, and report quality. Common issues without the skill include
 
 - **Inference profiling:** Use the TraceLens profiling skill
   ([`magpie-benchmark-profiling`](https://github.com/AMD-AGI/TraceLens/blob/main/TraceLens/Agent/Profiling/README.md))
-  or the [`magpie-kernel-evaluator`](../skills/magpie-kernel-evaluator/SKILL.md)
-  skill to collect vLLM/SGLang traces before analysis.
+  or try the [`magpie-kernel-evaluator`](https://github.com/amd/skills/blob/main/walkthroughs/magpie-kernel-evaluator.md)
+  walkthrough to collect vLLM/SGLang traces before analysis.
 - **Optimization loop:** Parse `analysis.md` P-items and impact markers to drive
   kernel tuning, fusion, batching, or precision narrowing, then re-profile and
   re-run analysis to measure improvement.

@@ -1,17 +1,26 @@
 root: index
 subtrees:
-  - caption: What is a Skill?
+  - caption: Catalog
     entries:
-      - file: concepts/index
+      - file: catalog
   - caption: Install
     entries:
       - file: install/installation
+  - caption: What is a Skill?
+    entries:
+      - file: concepts/index
   - caption: Walkthroughs
     entries:
       - file: walkthroughs/index
         subtrees:
           - entries:
               - file: walkthroughs/lemonade-router-builder
+              - file: walkthroughs/hyperloom-workload-optimizer
+              - file: walkthroughs/local-ai-app-integration
+              - file: walkthroughs/local-ai-use
+              - file: walkthroughs/magpie-kernel-evaluator
+              - file: walkthroughs/serving-llms-on-epyc
+              - file: walkthroughs/tracelens-analysis-orchestrator
   - caption: License
     entries:
       - file: license

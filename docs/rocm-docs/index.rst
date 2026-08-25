@@ -27,11 +27,8 @@ The AMD Skills public repository is located at
    :gutter: 3
 
    .. grid-item-card:: Catalog
-      :link: https://github.com/amd/skills#the-catalog
-      :link-type: url
 
-      Browse the `full catalog <https://github.com/amd/skills#the-catalog>`_
-      of available and planned skills.
+      * :doc:`Catalog <catalog>`
 
    .. grid-item-card:: Install
 
