@@ -1,11 +1,11 @@
-# AMD Skills Walkthroughs
+# AMD Skills walkthroughs
 
 ```{include} ../../../walkthroughs/README.md
 :start-after: "## Requirements"
-:end-before: "Please choose a skill to get started."
+:end-before: "Choose a skill to get started."
 ```
 
-Please choose a skill to get started.
+Choose a skill to get started.
 
 - [lemonade-router-builder](lemonade-router-builder.md): Generate a valid Lemonade router policy JSON from a plain-English description of routing intent.
 - [local-ai-use](local-ai-use.md): Teach your agent how to run image generation locally.

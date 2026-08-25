@@ -1,4 +1,4 @@
-# AMD Skills Walkthroughs: `magpie-kernel-evaluator`
+# magpie-kernel-evaluator
 
 Magpie connects model-serving benchmarks to GPU kernel optimization. This
 walkthrough follows the complete workflow:
@@ -116,7 +116,7 @@ magpie benchmark \
 Review request/token throughput, completed requests, TTFT, TPOT, ITL, and
 end-to-end latency. Record the Magpie commit, model revision, image/framework
 version, GPU model and count, tensor parallelism, precision, concurrency,
-input/output lengths, warmup, and profiler state.
+input and output lengths, warmup, and profiler state.
 
 ### Review TraceLens post-processing
 

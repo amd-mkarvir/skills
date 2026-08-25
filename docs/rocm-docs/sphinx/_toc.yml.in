@@ -1,12 +1,9 @@
 root: index
 subtrees:
-  - caption: Catalog
-    entries:
-      - file: catalog
   - caption: Install
     entries:
       - file: install/installation
-  - caption: What is a Skill?
+  - caption: Conceptual
     entries:
       - file: concepts/index
   - caption: Walkthroughs
@@ -21,6 +18,9 @@ subtrees:
               - file: walkthroughs/magpie-kernel-evaluator
               - file: walkthroughs/serving-llms-on-epyc
               - file: walkthroughs/tracelens-analysis-orchestrator
-  - caption: License
+  - caption: Reference
+    entries:
+      - file: catalog
+  - caption: About
     entries:
       - file: license

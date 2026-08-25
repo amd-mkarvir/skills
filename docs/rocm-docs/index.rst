@@ -16,8 +16,8 @@ Claude Code, OpenAI Codex, and Gemini CLI.
 
 .. important::
 
-   **Tech Preview:** We're building the catalog in the open, sharing progress
-   as the foundations take shape. Expect frequent changes as skills,
+   **Tech Preview:** This catalog is being built in the open, with progress
+   shared as the foundations take shape. Expect frequent changes as skills,
    categories, and descriptions evolve.
 
 The AMD Skills public repository is located at
@@ -26,18 +26,18 @@ The AMD Skills public repository is located at
 .. grid:: 2
    :gutter: 3
 
-   .. grid-item-card:: Catalog
-
-      * :doc:`Catalog <catalog>`
-
    .. grid-item-card:: Install
 
       * :doc:`Installing AMD Skills <install/installation>`
 
-   .. grid-item-card:: What is a Skill?
+   .. grid-item-card:: Conceptual
 
-      * :doc:`What is a Skill? <concepts/index>`
+      * :doc:`What is a skill? <concepts/index>`
 
    .. grid-item-card:: Walkthroughs
 
-      * :doc:`Walkthroughs <walkthroughs/index>`
+      * :doc:`All walkthroughs <walkthroughs/index>`
+
+   .. grid-item-card:: Catalog
+
+      * :doc:`Skills catalog <catalog>`

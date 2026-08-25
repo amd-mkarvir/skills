@@ -11,6 +11,6 @@ For hands-on, step-by-step guides that show a skill in action, see the
 ## Manual installation
 
 ```{include} ../../../README.md
-:start-after: "## Manual Installation"
+:start-after: "## Manual installation"
 :end-before: "## Contributing"
 ```

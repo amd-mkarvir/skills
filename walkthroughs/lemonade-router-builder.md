@@ -1,4 +1,4 @@
-# AMD Skills Walkthroughs: `lemonade-router-builder`
+# lemonade-router-builder
 
 The goal of this skill is to teach your AI agent to turn a plain-English
 description of routing intent into a valid Lemonade `collection.router` policy
@@ -9,19 +9,20 @@ JSON, ready for you to register and use.
 
 - Claude Code installed and authenticated.
 
-## Step 1 - Install and start Lemonade Server
+## Step 1 — Install and start Lemonade Server
 
 Install the **latest** Lemonade Server (**v11.5.0 or later**) from
 <https://lemonade-server.ai/docs/guide/install/>, and download
 at least two chat-capable models:
 
+```bash
 lemonade status
 lemonade list
 ```
 
-Note the exact model names shown by `lemonade list` - you will use them in the prompts below. The examples use `<LARGE_MODEL>` , `<CLOUD_MODEL>`, and`<SMALL_MODEL` as placeholders; substitute the names of your two installed models (e.g. Gemma-4-31B-it-GGUF for large, Gemma-3-4b-it-GGUF for small, and kimi-k2p6 for cloud).
+Note the exact model names shown by `lemonade list` - you will use them in the prompts below. The examples use `<LARGE_MODEL>`, `<CLOUD_MODEL>`, and `<SMALL_MODEL>` as placeholders; substitute the names of your two installed models (for example, Gemma-4-31B-it-GGUF for large, Gemma-3-4b-it-GGUF for small, and kimi-k2p6 for cloud).
 
-## Step 2 - Confirm the skill is visible
+## Step 2 — Confirm the skill is visible
 
 ```bash
 claude "Which skills can you see?" --model sonnet
@@ -33,7 +34,7 @@ You should see `lemonade-router-builder` in the list. If not, install it from yo
 npx skills add amd/skills --skill lemonade-router-builder --agent claude-code
 ```
 
-## Step 3 - Generate a simple keyword router
+## Step 3 — Generate a keyword router
 
 Open Claude and run:
 
@@ -52,7 +53,7 @@ The agent should:
 4. Output the JSON in a fenced block, plus curl commands for you to register
    and test it.
 
-## Step 4 - Register and test the router yourself
+## Step 4 — Register and test the router yourself
 
 The agent will save the policy as `router.json`. Note the full path it reports,
 then run the curl commands **from the same directory** (or use the absolute path).
@@ -75,7 +76,7 @@ Check the `x-lemonade-route` response header - it should show the matched rule
 id. With `"route_trace": true` the body also contains `x_lemonade_route` with
 the full per-condition trace.
 
-## Step 5 - Try a PII privacy router
+## Step 5 — Try a PII privacy router
 
 On a new Claude session, run:
 
@@ -97,7 +98,7 @@ condition and test with the email address only instead:
 Any message containing an email address must stay on <SMALL_MODEL>. Everything else can go to <CLOUD_MODEL>.
 ```
 
-## Step 6 - Try an LLM-as-router (intent-only)
+## Step 6 — Try an LLM-as-router (intent-only)
 
 On a new Claude session, run:
 
@@ -112,7 +113,7 @@ because "sensitive" is a meaning judgment with no concrete signal. The
 generated prompt should describe routing intent only - no reply-format
 instructions.
 
-## Step 7 - (Optional) Try to get things done without the skill
+## Step 7 — (Optional) Try to get things done without the skill
 
 Remove the skill and ask the same routing questions. Without the skill, the
 agent is likely to produce JSON that fails the server-side parser on the first

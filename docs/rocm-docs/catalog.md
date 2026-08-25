@@ -1,4 +1,4 @@
-# Catalog
+# Skills catalog
 
 ```{include} ../../README.md
 :start-after: "## The catalog"

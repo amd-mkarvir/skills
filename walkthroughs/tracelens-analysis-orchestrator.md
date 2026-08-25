@@ -1,4 +1,4 @@
-# AMD Skills Walkthroughs: `tracelens-analysis-orchestrator`
+# tracelens-analysis-orchestrator
 
 The goal of this skill is to teach your AI agent to run the TraceLens agentic
 analysis workflow on a PyTorch trace and produce a prioritized stakeholder
@@ -26,7 +26,7 @@ Expect this process to take 5–30 minutes depending on trace size.
 For vLLM / SGLang inference traces, the canonical collection guide in
 [TraceLens Inference Analysis](https://github.com/AMD-AGI/TraceLens/blob/main/docs/conceptual/inference-analysis.md)
 provides detailed instructions about collecting traces.
-Including capture mode graphs will produce better results but may require patching vLLM or SGLang.
+Including capture mode graphs will produce better results but might require patching vLLM or SGLang.
 
 ## Prerequisites
 
@@ -42,12 +42,12 @@ Including capture mode graphs will produce better results but may require patchi
 - A PyTorch profiler trace (`.json` or `.json.gz`) from a representative
   steady-state window (post-warmup). A single rank's trace is sufficient for
   per-rank analysis.
-- The **platform** of the first trace (e.g. `MI300X`, `MI325X`) — used for
+- The **platform** of the first trace (for example, `MI300X`, `MI325X`) — used for
   roofline limits and hardware reference in the report
 
-## Step 1 - Understanding which skills are available
+## Step 1 — Understanding which skills are available
 
-* Run `claude "which skills do you see?"`. You should see a list of skills that should not include anythink related to TraceLens.
+* Run `claude "which skills do you see?"`. You should see a list of skills that should not include anything related to TraceLens.
 * Make sure there is no `AGENTS.md` file on your local folder.
 
 ## Step 2 — Enabling your agent to see `tracelens-analysis-orchestrator`
@@ -180,7 +180,7 @@ analysis mode default, output to ./analysis_output_comparative
 Comparative output adds per-trace perf reports (`perf_report_trace1.xlsx`,
 `perf_report_trace2.xlsx`) and gap-based impact estimates in `category_data/`.
 
-> Cross-framework comparisons (e.g. vLLM vs. SGLang) may produce misleading gap
+> Cross-framework comparisons (for example, vLLM vs. SGLang) might produce misleading gap
 > estimates due to structural differences in operation call stacks.
 
 ## Step 8 — (Optional) Headless runs with the Cursor `agent` CLI

@@ -23,7 +23,7 @@ AMD Skills provide agents with knowledge, scripts, and conventions for working w
 Skills in this repository follow the standardized [Agent Skills](https://github.com/anthropics/skills) format and are designed to interoperate with the major coding agents like Cursor, Claude Code, OpenAI Codex, and Gemini CLI.
 
 > [!IMPORTANT]
-> **Tech Preview:** We’re building the catalog in the open, sharing progress as the foundations take shape. Expect frequent changes as skills, categories, and descriptions evolve.
+> **Tech Preview:** This catalog is being built in the open, with progress shared as the foundations take shape. Expect frequent changes as skills, categories, and descriptions evolve.
 
 
 
@@ -47,7 +47,7 @@ Browse everything available before installing:
 npx skills add amd/skills --list
 ```
 
-Please note that `npx` requires [Node.js](https://nodejs.org). Prefer to do it by hand? See [Manual installation](#manual-installation).
+`npx` requires [Node.js](https://nodejs.org). Prefer to do it by hand? See [Manual installation](#manual-installation).
 
 ## Using a skill
 
@@ -64,7 +64,7 @@ For hands-on, step-by-step guides that show a skill in action, see the [walkthro
 
 The initial catalog is organized into three focus areas, spanning the full stack from client to cloud. This catalog is expected to grow significantly as more skills land.
 
-### Client-Native
+### Client-native
 
 Run and optimize on Ryzen AI.
 
@@ -73,7 +73,7 @@ Run and optimize on Ryzen AI.
 | [`local-ai-use`](https://github.com/amd/skills/blob/main/skills/local-ai-use/SKILL.md) | Route image generation, text-to-speech, and speech-to-text through a local AI server to reduce token cost. | in-repo |
 | [`local-ai-app-integration`](https://github.com/amd/skills/blob/main/skills/local-ai-app-integration/SKILL.md) | Integrate local AI into cloud LLM apps for offline support, better privacy, and lower API costs. | in-repo |
 
-### Cross-Stack
+### Cross-stack
 
 Cross-stack skills, from client to cloud.
 
@@ -84,7 +84,7 @@ Cross-stack skills, from client to cloud.
 | [`lemonade-router-builder`](https://github.com/amd/skills/blob/main/skills/lemonade-router-builder/SKILL.md) | Set up a Lemonade model router that handles requests based on content, sensitivity, or required capabilities. | in-repo |
 | `hrr-replay-analysis` | Record, replay, and analyze GPU workload behavior on ROCm across AMD Instinct, Radeon, and Ryzen hardware using HIP Record and Replay archives. | _planned_ |
 
-### Server-Native
+### Server-native
 
 Run and optimize on AMD Instinct.
 
@@ -119,7 +119,7 @@ Documentation describes an API surface: every flag, every option, neutral by des
 Skills earn their keep on repeated, opinionated workflows, exactly where the AMD stack lives.
 
 
-## Catalog Federation
+## Catalog federation
 
 The AMD stack is large and moves fast. ROCm, HIP, Ryzen AI, and framework integrations each have their own team, release cadence, and validation matrix. So skills here are **federated**: each skill is owned and versioned by the team that owns the product it describes, and this repository is the catalog that brings them together.
 
@@ -142,7 +142,7 @@ The AMD stack is large and moves fast. ROCm, HIP, Ryzen AI, and framework integr
    gfx-target-...  triton-amd-...  ...               integration/    repos
 ```
 
-## Manual Installation
+## Manual installation
 
 Until marketplace integration lands, install skills manually: clone this repo, then copy (or symlink) the skill folders you want from `skills/` into your agent's skills directory. Each agent discovers `SKILL.md` automatically.
 

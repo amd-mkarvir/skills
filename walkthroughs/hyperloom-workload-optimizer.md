@@ -1,4 +1,4 @@
-# AMD Skills Walkthroughs: `hyperloom-workload-optimizer`
+# hyperloom-workload-optimizer
 
 This skill teaches your AI agent to set up a Hyperloom workspace and autonomously
 optimize end-to-end LLM inference throughput on AMD Instinct GPUs (MI300X / MI325X / MI355X).
