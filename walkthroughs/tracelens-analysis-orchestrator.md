@@ -1,4 +1,4 @@
-# tracelens-analysis-orchestrator
+# AMD Skills Walkthroughs: `tracelens-analysis-orchestrator`
 
 The goal of this skill is to teach your AI agent to run the TraceLens agentic
 analysis workflow on a PyTorch trace and produce a prioritized stakeholder

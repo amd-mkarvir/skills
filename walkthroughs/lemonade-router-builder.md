@@ -1,4 +1,4 @@
-# lemonade-router-builder
+# AMD Skills Walkthroughs: `lemonade-router-builder`
 
 The goal of this skill is to teach your AI agent to turn a plain-English
 description of routing intent into a valid Lemonade `collection.router` policy

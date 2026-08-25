@@ -1,4 +1,4 @@
-# local-ai-app-integration
+# AMD Skills Walkthroughs: `local-ai-app-integration`
 
 The goal of this skill is to teach your AI agent to add a **local AI mode** to an
 existing app that today only talks to cloud AI APIs.

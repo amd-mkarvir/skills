@@ -1,4 +1,4 @@
-# magpie-kernel-evaluator
+# AMD Skills Walkthroughs: `magpie-kernel-evaluator`
 
 Magpie connects model-serving benchmarks to GPU kernel optimization. This
 walkthrough follows the complete workflow:

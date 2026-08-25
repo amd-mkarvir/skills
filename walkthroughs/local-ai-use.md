@@ -1,4 +1,4 @@
-# local-ai-use
+# AMD Skills Walkthroughs: `local-ai-use`
 
 The goal of this skill is to teach your AI agent to use image generation, text generation, and text to speech locally.
 

@@ -1,4 +1,4 @@
-# serving-llms-on-epyc
+# AMD Skills Walkthroughs: `serving-llms-on-epyc`
 
 The goal of this skill is to teach your AI agent to bring up a vLLM OpenAI-compatible
 endpoint on an **AMD EPYC™ CPU** host using the zentorch backend: detecting the CPU,
