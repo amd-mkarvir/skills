@@ -7,7 +7,7 @@ name: federate-skills
 # skill only when the contents of its upstream folder changed, so a night
 # with no upstream activity produces no diff and no pull request. When
 # something did change, the run regenerates the agent manifests, validates
-# everything, and opens a pull request titled "Bump <skill> to <short commit>".
+# everything, and opens a pull request titled "Bump `<skill>` to `<commit>`".
 #
 # Dispatch it from the branch the update should be merged into (normally
 # `main`), never from `bot/federate-skills`, which is where it pushes.

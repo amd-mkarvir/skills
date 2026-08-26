@@ -218,7 +218,7 @@ class TestPullRequestSummary(unittest.TestCase):
     def test_single_bump_names_the_skill_and_short_commit(self):
         summary = fed.build_summary([self.result("my-skill", "f4af496dbe9c")])
         self.assertTrue(summary["changed"])
-        self.assertEqual(summary["title"], "Bump my-skill to f4af496")
+        self.assertEqual(summary["title"], "Bump `my-skill` to `f4af496`")
         self.assertIn("f4af496", summary["body"])
 
     def test_nothing_changed_means_no_pull_request(self):

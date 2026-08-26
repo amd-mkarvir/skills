@@ -851,14 +851,14 @@ def pr_title(updated: list[ImportResult]) -> str:
     """Compose the pull request title for a run.
 
     A single bumped skill — the common nightly case — reads
-    "Bump <skill> to <short commit>". No bumps means no pull request, hence
-    no title.
+    "Bump `<skill>` to `<short commit>`". No bumps means no pull request,
+    hence no title.
     """
     if not updated:
         return ""
     if len(updated) == 1:
         result = updated[0]
-        return f"Bump {result.folder} to {result.short_commit}"
+        return f"Bump `{result.folder}` to `{result.short_commit}`"
     return f"Bump {len(updated)} federated skills"
 
 
