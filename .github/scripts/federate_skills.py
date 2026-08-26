@@ -19,7 +19,7 @@ For each declared skill, the script:
    recorded in the vendored copy's `.federated.json`. A skill whose
    upstream contents are unchanged is left byte-for-byte as it is on
    disk, so a run that finds no upstream change produces no diff at all
-   (and therefore no pull request). `--force` re-vendors regardless.
+   and therefore no pull request.
 3. Copies changed skill folders into `skills/<name>/`. When refreshing an
    existing copy, a local `evals/` subdirectory is kept if the upstream
    skill folder does not ship one (catalog-authored behavioral tests).
@@ -47,22 +47,19 @@ For each declared skill, the script:
 7. Adds each declared skill to the bundle's `skills` array in
    `.claude-plugin/marketplace.json` (as a `./skills/<name>` path) so it
    ships in the single AMD plugin.
-8. With `--prune`, removes any previously vendored skill (one with a
-   `.federated.json`) that is no longer declared in
-   `.github/federation.json`, and drops it from the bundle's `skills`
-   array. Pruning is opt-in so that scheduled runs never delete a
-   shipped skill on their own.
+
+Nothing is ever deleted here. A vendored skill that is no longer declared
+in `.github/federation.json` is reported and left alone; removing it is a
+deliberate pull request by a maintainer.
 
 Usage:
-    uv run .github/scripts/federate_skills.py                 # write changes
-    uv run .github/scripts/federate_skills.py --dry-run       # report only
+    uv run .github/scripts/federate_skills.py                 # vendor changed skills
     uv run .github/scripts/federate_skills.py --check-catalog # validate the file
     uv run .github/scripts/federate_skills.py --only tracelens-analysis-orchestrator
 
 The `--only` flag (repeatable) restricts the run to the named *local*
-skill folder(s) (the `as:` name when one is set): other skills in the
-catalog are skipped and pruning is limited to the named skills, so
-unrelated federated skills are never removed.
+skill folder(s) (the `as:` name when one is set); other skills in the
+catalog are left untouched.
 
 `--summary-json PATH` writes a machine-readable record of the run
 (including a ready-made pull request title and body) for the calling
@@ -614,21 +611,16 @@ def rewrite_skill_name(skill_dir: Path, new_name: str, log: list[str]) -> None:
     log.append(f"    [SKILL.md] name -> {new_name}")
 
 
-def update_publish_list(
-    imported: Iterable[str],
-    removed: Iterable[str],
-    dry_run: bool,
-) -> bool:
+def update_publish_list(declared: Iterable[str]) -> bool:
     """Sync the bundle's `skills` array in `.claude-plugin/marketplace.json`.
 
     AMD ships a single curated plugin whose `skills` array lists the published
-    skills as `./skills/<name>` paths. Newly vendored federated skills are added
-    so they ship in the bundle, and skills that were pruned from
-    `.github/federation.json` are removed. The existing curation order is
+    skills as `./skills/<name>` paths. Newly vendored federated skills are
+    added so they ship in the bundle. The existing curation order is
     preserved; freshly added skills are appended in sorted order for a
     deterministic diff.
 
-    Returns True when the file was modified (or would be in a dry run).
+    Returns True when the file was modified.
     """
     data = json.loads(CLAUDE_MARKETPLACE.read_text(encoding="utf-8"))
     plugins = data.get("plugins")
@@ -642,20 +634,18 @@ def update_publish_list(
     if not isinstance(skills, list):
         skills = []
 
-    removed_paths = {f"{SKILLS_PATH_PREFIX}{name}" for name in removed}
-    kept = [s for s in skills if s not in removed_paths]
     present = {
         s[len(SKILLS_PATH_PREFIX) :].strip("/")
-        for s in kept
+        for s in skills
         if isinstance(s, str) and s.startswith(SKILLS_PATH_PREFIX)
     }
     additions = sorted(
-        f"{SKILLS_PATH_PREFIX}{name}" for name in imported if name not in present
+        f"{SKILLS_PATH_PREFIX}{name}" for name in declared if name not in present
     )
-    new_skills = kept + additions
+    new_skills = skills + additions
 
     changed = new_skills != skills
-    if changed and not dry_run:
+    if changed:
         entry["skills"] = new_skills
         CLAUDE_MARKETPLACE.write_text(
             json.dumps(data, indent=2, ensure_ascii=False) + "\n",
@@ -666,8 +656,6 @@ def update_publish_list(
 
 def import_source(
     source: Source,
-    dry_run: bool,
-    force: bool,
     log: list[str],
 ) -> list[ImportResult]:
     results: list[ImportResult] = []
@@ -695,10 +683,9 @@ def import_source(
 
             dest_name = spec.dest_name
             dest_skill = SKILLS_DIR / dest_name
+            marker = read_marker(dest_skill)
             upstream_hash = content_hash(src_skill)
-            if not force and is_up_to_date(
-                read_marker(dest_skill), source, spec, upstream_hash
-            ):
+            if is_up_to_date(marker, source, spec, upstream_hash):
                 log.append(
                     f"[{source.name}] skills/{dest_name} is up to date "
                     f"(unchanged upstream); left untouched"
@@ -708,7 +695,7 @@ def import_source(
                         source=source,
                         folder=dest_name,
                         path=spec.path,
-                        commit=read_marker(dest_skill).get("commit", commit),
+                        commit=marker.get("commit", commit),
                         updated=False,
                     )
                 )
@@ -726,24 +713,23 @@ def import_source(
                 or truncate_description(description)
             )
 
-            action = "would vendor" if dry_run else "vendoring"
             renamed = f" (as {dest_name})" if dest_name != spec.folder else ""
             log.append(
-                f"[{source.name}] {action} {spec.path} -> skills/{dest_name}{renamed}"
+                f"[{source.name}] vendoring {spec.path} -> "
+                f"skills/{dest_name}{renamed}"
             )
-            if not dry_run:
-                copy_skill(src_skill, dest_skill, log)
-                write_marker(dest_skill, source, commit, spec.path, upstream_hash)
-                write_card(dest_skill, source, marketplace_description)
-                rewrite_skill_name(dest_skill, dest_name, log)
-                rewrite_external_references(
-                    dest_skill,
-                    spec.path,
-                    repo_files,
-                    source.repo,
-                    commit,
-                    log,
-                )
+            copy_skill(src_skill, dest_skill, log)
+            write_marker(dest_skill, source, commit, spec.path, upstream_hash)
+            write_card(dest_skill, source, marketplace_description)
+            rewrite_skill_name(dest_skill, dest_name, log)
+            rewrite_external_references(
+                dest_skill,
+                spec.path,
+                repo_files,
+                source.repo,
+                commit,
+                log,
+            )
 
             results.append(
                 ImportResult(
@@ -759,57 +745,50 @@ def import_source(
     return results
 
 
-def prune_orphans(
+def report_undeclared(
     declared: set[str],
     existing: dict[str, dict],
-    dry_run: bool,
     log: list[str],
-) -> list[str]:
-    removed: list[str] = []
-    for name, marker in existing.items():
+) -> None:
+    """Note vendored skills that no source declares any more.
+
+    They are reported rather than deleted: removing a shipped skill is a
+    decision for a maintainer's pull request, not a side effect of a
+    scheduled run.
+    """
+    for name, marker in sorted(existing.items()):
         if name in declared:
             continue
         log.append(
-            f"[orphan] removing skills/{name} (previously imported from "
-            f"{marker.get('repo', '?')}@{marker.get('ref', '?')})"
+            f"[undeclared] skills/{name} is vendored (from "
+            f"{marker.get('repo', '?')}) but no longer declared in "
+            f"{CATALOG_FILE.name}; remove it in a pull request if that is "
+            "intended"
         )
-        if not dry_run:
-            shutil.rmtree(SKILLS_DIR / name)
-        removed.append(name)
-    return removed
 
 
 def commit_url(repo: str, commit: str) -> str:
     return f"https://github.com/{repo}/commit/{commit}"
 
 
-def pr_title(updated: list[ImportResult], removed: list[str]) -> str:
+def pr_title(updated: list[ImportResult]) -> str:
     """Compose the pull request title for a run.
 
     A single bumped skill — the common nightly case — reads
-    "Bump <skill> to <short commit>".
+    "Bump <skill> to <short commit>". No bumps means no pull request, hence
+    no title.
     """
-    if updated and not removed:
-        if len(updated) == 1:
-            result = updated[0]
-            return f"Bump {result.folder} to {result.short_commit}"
-        return f"Bump {len(updated)} federated skills"
-    if removed and not updated:
-        if len(removed) == 1:
-            return f"Remove federated skill {removed[0]}"
-        return f"Remove {len(removed)} federated skills"
-    if updated and removed:
-        return (
-            f"Update federated skills ({len(updated)} bumped, "
-            f"{len(removed)} removed)"
-        )
-    return ""
+    if not updated:
+        return ""
+    if len(updated) == 1:
+        result = updated[0]
+        return f"Bump {result.folder} to {result.short_commit}"
+    return f"Bump {len(updated)} federated skills"
 
 
 def pr_body(
     updated: list[ImportResult],
     unchanged: list[ImportResult],
-    removed: list[str],
 ) -> str:
     lines = [
         "Automated federation refresh driven by `.github/federation.json`.",
@@ -826,10 +805,6 @@ def pr_body(
                 f"({commit_url(result.source.repo, result.commit)}) "
                 f"from `{result.source.repo}/{result.path}`"
             )
-    if removed:
-        lines += ["", "**Removed** (no longer declared in `.github/federation.json`)", ""]
-        for name in sorted(removed):
-            lines.append(f"- `{name}`")
     if unchanged:
         lines += ["", "**Unchanged**", ""]
         for result in sorted(unchanged, key=lambda r: r.folder):
@@ -843,18 +818,15 @@ def pr_body(
     return "\n".join(lines) + "\n"
 
 
-def build_summary(
-    results: list[ImportResult],
-    removed: list[str],
-) -> dict:
+def build_summary(results: list[ImportResult]) -> dict:
     """Machine-readable record of the run for the calling workflow."""
     updated = [r for r in results if r.updated]
     unchanged = [r for r in results if not r.updated]
     return {
         "ref": FEDERATED_REF,
-        "changed": bool(updated or removed),
-        "title": pr_title(updated, removed),
-        "body": pr_body(updated, unchanged, removed),
+        "changed": bool(updated),
+        "title": pr_title(updated),
+        "body": pr_body(updated, unchanged),
         "updated": [
             {
                 "skill": r.folder,
@@ -866,17 +838,11 @@ def build_summary(
             for r in sorted(updated, key=lambda r: r.folder)
         ],
         "unchanged": sorted(r.folder for r in unchanged),
-        "removed": sorted(removed),
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Resolve and report the planned changes without writing them.",
-    )
     parser.add_argument(
         "--catalog",
         type=Path,
@@ -896,27 +862,8 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         metavar="SKILL",
         help=(
-            "Vendor only the named skill folder (repeatable). When set, "
-            "skills not named here are left untouched and pruning is "
-            "restricted to the named skills, so other federated skills are "
-            "never removed."
-        ),
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help=(
-            "Re-vendor every declared skill even when its upstream contents "
-            "are unchanged."
-        ),
-    )
-    parser.add_argument(
-        "--prune",
-        action="store_true",
-        help=(
-            "Delete vendored skills that are no longer declared in the "
-            "federation file. Off by default so a scheduled run cannot "
-            "remove a shipped skill on its own."
+            "Vendor only the named skill folder (repeatable). Skills not "
+            "named here are left untouched."
         ),
     )
     parser.add_argument(
@@ -974,37 +921,19 @@ def main(argv: list[str] | None = None) -> int:
                     f"more than one source in {args.catalog}."
                 )
             declared.add(spec.dest_name)
-        all_results.extend(import_source(source, args.dry_run, args.force, log))
+        all_results.extend(import_source(source, log))
 
-    if args.prune:
-        # With --only we deliberately ignore skills the user didn't name, so
-        # restrict orphan pruning to just those skills. Otherwise every other
-        # federated skill would look like an orphan and be deleted.
-        prunable = (
-            {
-                name: marker
-                for name, marker in existing_federated.items()
-                if name in only
-            }
-            if only
-            else existing_federated
-        )
-        pruned = prune_orphans(declared, prunable, args.dry_run, log)
-    else:
-        pruned = []
-        undeclared = sorted(set(existing_federated) - declared)
-        for name in undeclared:
-            log.append(
-                f"[orphan] skills/{name} is vendored but not declared in "
-                f"{args.catalog.name}; re-run with --prune to remove it"
-            )
+    # With --only the skills the caller didn't name are deliberately ignored,
+    # so they would all look undeclared; skip the report in that case.
+    if not only:
+        report_undeclared(declared, existing_federated, log)
 
-    publish_changed = update_publish_list(declared, pruned, args.dry_run)
+    publish_changed = update_publish_list(declared)
 
     for line in log:
         print(line)
 
-    summary = build_summary(all_results, pruned)
+    summary = build_summary(all_results)
     if args.summary_json:
         args.summary_json.parent.mkdir(parents=True, exist_ok=True)
         args.summary_json.write_text(
@@ -1014,12 +943,7 @@ def main(argv: list[str] | None = None) -> int:
     print("")
     print(f"Bumped: {len(summary['updated'])} skill(s)")
     print(f"Already up to date: {len(summary['unchanged'])} skill(s)")
-    print(f"Removed orphans: {len(pruned)}")
-    print(
-        "Publish list: "
-        f"{'changed' if publish_changed else 'unchanged'}"
-        f"{' (dry run)' if args.dry_run and publish_changed else ''}"
-    )
+    print(f"Publish list: {'changed' if publish_changed else 'unchanged'}")
     if summary["title"]:
         print(f"Pull request title: {summary['title']}")
     return 0

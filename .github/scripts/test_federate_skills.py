@@ -181,32 +181,22 @@ class TestPullRequestSummary(unittest.TestCase):
         )
 
     def test_single_bump_names_the_skill_and_short_commit(self):
-        summary = fed.build_summary([self.result("my-skill", "f4af496dbe9c")], [])
+        summary = fed.build_summary([self.result("my-skill", "f4af496dbe9c")])
         self.assertTrue(summary["changed"])
         self.assertEqual(summary["title"], "Bump my-skill to f4af496")
         self.assertIn("f4af496", summary["body"])
 
     def test_nothing_changed_means_no_pull_request(self):
         summary = fed.build_summary(
-            [self.result("my-skill", "f4af496dbe9c", updated=False)], []
+            [self.result("my-skill", "f4af496dbe9c", updated=False)]
         )
         self.assertFalse(summary["changed"])
         self.assertEqual(summary["title"], "")
         self.assertEqual(summary["unchanged"], ["my-skill"])
 
-    def test_titles_for_multi_skill_and_removal_runs(self):
+    def test_several_bumps_share_one_title(self):
         two = [self.result("a", "1111111"), self.result("b", "2222222")]
-        self.assertEqual(
-            fed.build_summary(two, [])["title"], "Bump 2 federated skills"
-        )
-        self.assertEqual(
-            fed.build_summary([], ["gone"])["title"],
-            "Remove federated skill gone",
-        )
-        self.assertEqual(
-            fed.build_summary(two[:1], ["gone"])["title"],
-            "Update federated skills (1 bumped, 1 removed)",
-        )
+        self.assertEqual(fed.build_summary(two)["title"], "Bump 2 federated skills")
 
 
 if __name__ == "__main__":

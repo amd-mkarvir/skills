@@ -4,10 +4,10 @@ name: federate-skills
 # declared in `.github/federation.json`. Runs nightly and on demand.
 #
 # `federate_skills.py` clones each declared repo at `main` and re-vendors a
-# skill only when the contents of its upstream folder changed, so a night with no
-# upstream activity produces no diff and no pull request. When something did
-# change, the run regenerates the agent manifests, validates everything, and
-# opens a pull request titled "Bump <skill> to <short commit>".
+# skill only when the contents of its upstream folder changed, so a night
+# with no upstream activity produces no diff and no pull request. When
+# something did change, the run regenerates the agent manifests, validates
+# everything, and opens a pull request titled "Bump <skill> to <short commit>".
 #
 # See the "Catalog federation" section of `README.md` for the design and
 # `CONTRIBUTING.md` for the federation file's schema.
@@ -19,25 +19,10 @@ on:
     - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
-      dry_run:
-        description: "Resolve sources and print planned changes without committing."
-        required: false
-        type: boolean
-        default: false
       only:
         description: "Limit the run to one local skill name (e.g. tracelens-analysis-orchestrator)."
         required: false
         type: string
-      force:
-        description: "Re-vendor declared skills even when upstream is unchanged."
-        required: false
-        type: boolean
-        default: false
-      prune:
-        description: "Delete vendored skills that are no longer declared in .github/federation.json."
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: write
@@ -64,15 +49,9 @@ jobs:
           # Written outside the work tree so the summary never shows up as a
           # repository change.
           SUMMARY: ${{ runner.temp }}/federation-summary.json
-          DRY_RUN: ${{ inputs.dry_run }}
-          FORCE: ${{ inputs.force }}
-          PRUNE: ${{ inputs.prune }}
           ONLY: ${{ inputs.only }}
         run: |
           args=(--summary-json "$SUMMARY")
-          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
-          if [ "$FORCE" = "true" ]; then args+=(--force); fi
-          if [ "$PRUNE" = "true" ]; then args+=(--prune); fi
           if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
           uv run .github/scripts/federate_skills.py "${args[@]}"
 
@@ -84,17 +63,14 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Regenerate derived plugin manifests (Cursor + Codex)
-        if: ${{ inputs.dry_run != true }}
         run: ./.github/scripts/publish.sh
 
       - name: Validate skills and manifests
-        if: ${{ inputs.dry_run != true }}
         run: ./.github/scripts/check.sh
 
       # Unchanged skills are left byte-for-byte alone, so an empty work tree
       # here is the authoritative "nothing to federate" signal.
       - name: Detect changes
-        if: ${{ inputs.dry_run != true }}
         id: changes
         run: |
           if [ -z "$(git status --porcelain)" ]; then
@@ -109,7 +85,7 @@ jobs:
       # main, so vendored changes stay reviewable and the standard `validate`
       # workflow gates them. Re-running updates the same PR in place.
       - name: Open pull request
-        if: ${{ inputs.dry_run != true && steps.changes.outputs.changed == 'true' }}
+        if: ${{ steps.changes.outputs.changed == 'true' }}
         uses: peter-evans/create-pull-request@v7
         with:
           branch: bot/federate-skills

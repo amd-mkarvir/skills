@@ -132,7 +132,7 @@ skill whose upstream folder contents changed, and opens a pull request titled
 `Bump <skill> to <short commit>`. A night with no upstream change produces no
 pull request, so the only ones you see are real bumps.
 
-To remove a skill, drop its entry from `.github/federation.json`. Nightly runs
-report the now-undeclared copy but never delete it on their own; a maintainer
-removes it by dispatching `federate-skills` with **prune** enabled, which
-deletes the vendored copy and its bundle entry.
+To remove a skill, open a pull request that drops its entry from
+`.github/federation.json`, deletes the vendored `skills/<name>/` folder, and
+regenerates the manifests. Federation never deletes anything on its own: a
+nightly run only reports a vendored copy that no source declares any more.
