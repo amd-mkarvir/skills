@@ -6,7 +6,7 @@ Orchestrates modular PyTorch profiler trace analysis with TraceLens: generates p
 
 ## Owner
 
-danielholanda (federated from [danielholanda/TraceLens](https://github.com/danielholanda/TraceLens))
+AMD-AGI (federated from [AMD-AGI/TraceLens](https://github.com/AMD-AGI/TraceLens))
 
 ## License
 
