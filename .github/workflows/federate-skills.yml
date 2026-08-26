@@ -6,8 +6,9 @@ name: federate-skills
 # `federate_skills.py` clones each declared repo at `main` and re-vendors a
 # skill only when the contents of its upstream folder changed, so a night
 # with no upstream activity produces no diff and no pull request. When
-# something did change, the run regenerates the agent manifests, validates
-# everything, and opens a pull request titled "Bump `<skill>` to `<commit>`".
+# something did change, the run regenerates the agent manifests and opens a
+# pull request titled "Bump `<skill>` to `<commit>`". Validating the result is
+# the `validate` workflow's job on that pull request, not this workflow's.
 #
 # Dispatch it from the branch the update should be merged into (normally
 # `main`), never from `bot/federate-skills`, which is where it pushes.
@@ -83,16 +84,6 @@ jobs:
       - name: Regenerate derived plugin manifests (Cursor + Codex)
         run: ./.github/scripts/publish.sh
 
-      # A faithful mirror of upstream can fail the catalog's own gates: a
-      # source repo that ships no `evals/evals.json` leaves a vendored skill
-      # without the dataset every skill is required to have. That is precisely
-      # the thing a human needs to see, so record the result and carry on.
-      # Failing the job here would kill the pull request carrying the evidence.
-      - name: Validate skills and manifests
-        id: check
-        continue-on-error: true
-        run: ./.github/scripts/check.sh
-
       # Unchanged skills are left byte-for-byte alone (a marker-only
       # difference is reverted by the importer), so an empty work tree here is
       # the authoritative "nothing to federate" signal. Nothing to federate is
@@ -106,22 +97,6 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
             git status --short
           fi
-
-      - name: Explain a failing mirror in the pull request
-        id: note
-        if: ${{ steps.check.outcome == 'failure' && steps.changes.outputs.changed == 'true' }}
-        run: |
-          {
-            echo "note<<FEDERATION_NOTE_EOF"
-            echo "> [!WARNING]"
-            echo "> \`check.sh\` fails on this update, so it is not mergeable as it stands."
-            echo "> A federated folder mirrors its source repo exactly, so anything the source"
-            echo "> stopped shipping is deleted here. The usual cause is \`evals/evals.json\`,"
-            echo "> which the catalog requires of every skill: restore it in the source repo and"
-            echo "> re-run, or drop the skill from \`.github/federation.json\`. The workflow run"
-            echo "> log has the exact error."
-            echo "FEDERATION_NOTE_EOF"
-          } >> "$GITHUB_OUTPUT"
 
       # Push to a dedicated branch and open a PR rather than committing to
       # main, so vendored changes stay reviewable and the standard `validate`
@@ -137,8 +112,6 @@ jobs:
           title: ${{ steps.federate.outputs.title || 'Refresh federated skills' }}
           body: |
             ${{ steps.federate.outputs.body }}
-
-            ${{ steps.note.outputs.note }}
 
             Opened by the `federate-skills` workflow ([run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})).
           labels: |
@@ -157,7 +130,6 @@ jobs:
       - name: Report outcome
         env:
           CHANGED: ${{ steps.changes.outputs.changed }}
-          CHECK: ${{ steps.check.outcome }}
           TITLE: ${{ steps.federate.outputs.title }}
           PR_URL: ${{ steps.pr.outputs.pull-request-url }}
           PR_OPERATION: ${{ steps.pr.outputs.pull-request-operation }}
@@ -171,10 +143,3 @@ jobs:
           fi
           echo "$message"
           echo "$message" >> "$GITHUB_STEP_SUMMARY"
-
-          # The pull request is open by now, so this failure points a reviewer
-          # at it instead of hiding the update behind a red gate.
-          if [ "$CHECK" = "failure" ]; then
-            echo "::error title=Federated tree fails validation::The mirrored skills do not pass check.sh. Read the 'Validate skills and manifests' step for the error; the pull request above carries the change that caused it."
-            exit 1
-          fi
