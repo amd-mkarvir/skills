@@ -19,7 +19,10 @@ For each declared skill, the script:
    recorded in the vendored copy's `.federated.json`. A skill whose
    upstream contents are unchanged is left byte-for-byte as it is on
    disk, so a run that finds no upstream change produces no diff at all
-   and therefore no pull request.
+   and therefore no pull request. If a skill is re-vendored anyway and
+   the resulting files match the copy already on disk, the previous
+   marker is restored, because a diff consisting only of a commit and a
+   hash is noise. Deleting a marker forces that skill to be re-vendored.
 3. Copies changed skill folders into `skills/<name>/`. When refreshing an
    existing copy, a local `evals/` subdirectory is kept if the upstream
    skill folder does not ship one (catalog-authored behavioral tests).
@@ -95,6 +98,10 @@ FEDERATED_REF = "main"
 SKILLS_DIR = REPO_ROOT / "skills"
 CLAUDE_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 MARKER_FILENAME = ".federated.json"
+# Never part of a skill's content: these appear only in a working copy, and
+# hashing them would make change detection depend on whether someone happened
+# to run the tests before the importer.
+IGNORED_DIR_NAMES = {"__pycache__", ".pytest_cache"}
 # Local-only subdirectories preserved across re-import when absent upstream.
 PRESERVE_IF_ABSENT_UPSTREAM = ("evals",)
 # The bundle references each published skill as `./skills/<name>` in the
@@ -334,8 +341,8 @@ def shallow_clone(repo: str, sub_paths: Iterable[str], dest: Path) -> str:
     return run(["git", "rev-parse", "HEAD"], cwd=dest)
 
 
-def content_hash(skill_dir: Path) -> str:
-    """Hash every file under `skill_dir` (relative paths and bytes).
+def content_hash(root: Path, exclude: Iterable[str] = ()) -> str:
+    """Hash every file under `root` (relative paths and bytes).
 
     Change detection compares this against the hash stored in the vendored
     copy's marker, so a skill is re-vendored when its upstream folder's
@@ -343,10 +350,29 @@ def content_hash(skill_dir: Path) -> str:
     commit. Without that distinction every commit to a large product repo
     would churn the vendored copies (the marker and the commit-pinned links)
     and open a pull request with no substance in it.
+
+    Files are fed to the digest ordered by their POSIX relative path rather
+    than by sorting `Path` objects, because `Path` comparison is
+    case-insensitive on Windows: `sorted()` puts `SKILL.md` after `agents/`
+    on a maintainer's machine and before it on a Linux runner, which would
+    hash identical files to different digests.
+
+    `exclude` names relative paths to leave out of the digest.
     """
+    skipped = set(exclude)
+    entries = sorted(
+        (
+            (path.relative_to(root).as_posix(), path)
+            for path in root.rglob("*")
+            if path.is_file()
+        ),
+        key=lambda entry: entry[0],
+    )
     digest = hashlib.sha256()
-    for path in sorted(p for p in skill_dir.rglob("*") if p.is_file()):
-        digest.update(path.relative_to(skill_dir).as_posix().encode("utf-8"))
+    for rel, path in entries:
+        if rel in skipped or IGNORED_DIR_NAMES.intersection(rel.split("/")[:-1]):
+            continue
+        digest.update(rel.encode("utf-8"))
         digest.update(b"\0")
         digest.update(hashlib.sha256(path.read_bytes()).digest())
     return digest.hexdigest()
@@ -734,6 +760,16 @@ def import_source(
                 f"[{source.name}] vendoring {spec.path} -> "
                 f"skills/{dest_name}{renamed}"
             )
+            marker_path = dest_skill / MARKER_FILENAME
+            previous_marker = (
+                marker_path.read_bytes() if marker_path.is_file() else None
+            )
+            previous_content = (
+                content_hash(dest_skill, exclude=[MARKER_FILENAME])
+                if dest_skill.is_dir()
+                else None
+            )
+
             copy_skill(src_skill, dest_skill, log)
             write_marker(dest_skill, source, commit, spec.path, upstream_hash)
             write_card(dest_skill, source, marketplace_description)
@@ -746,6 +782,30 @@ def import_source(
                 commit,
                 log,
             )
+
+            # The marker is bookkeeping, not content. If re-vendoring produced
+            # the same files as the copy already on disk, put the old marker
+            # back: a pull request whose entire diff is a hash and a timestamp
+            # tells a reviewer nothing.
+            if previous_marker is not None and previous_content == content_hash(
+                dest_skill, exclude=[MARKER_FILENAME]
+            ):
+                marker_path.write_bytes(previous_marker)
+                log.append(
+                    f"[{source.name}] skills/{dest_name} re-vendored to "
+                    f"identical content; marker left at "
+                    f"{marker.get('commit', '?')[:7]}"
+                )
+                results.append(
+                    ImportResult(
+                        source=source,
+                        folder=dest_name,
+                        path=spec.path,
+                        commit=marker.get("commit", commit),
+                        updated=False,
+                    )
+                )
+                continue
 
             results.append(
                 ImportResult(

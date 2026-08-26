@@ -12,13 +12,16 @@ so they are guarded here:
 
   - Change detection. The nightly workflow opens a pull request whenever the
     work tree is dirty, so a content hash that moves for the wrong reason
-    turns every quiet night into a no-op pull request.
+    turns every quiet night into a no-op pull request. That includes moving
+    between platforms: the hash has to agree between a maintainer's machine
+    and the Linux runner.
   - `main`-only tracking. A source entry that manages to name a ref must
     fail the run, not get silently coerced to `main`.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -121,6 +124,38 @@ class TestFederationFile(unittest.TestCase):
 
 
 class TestChangeDetection(unittest.TestCase):
+    def test_hash_order_does_not_depend_on_the_platform(self):
+        # `sorted()` over Path objects is case-insensitive on Windows, so it
+        # feeds `SKILL.md` and `agents/one.md` to the digest in one order
+        # there and the opposite order on Linux. Pin the ordering to the
+        # POSIX relative path so both platforms agree; otherwise a runner
+        # re-hashes identical files to a different digest and re-vendors.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = write_skill(
+                Path(tmp) / "skill", {"SKILL.md": "body", "agents/one.md": "x"}
+            )
+            expected = hashlib.sha256()
+            for rel in ("SKILL.md", "agents/one.md"):
+                expected.update(rel.encode("utf-8"))
+                expected.update(b"\0")
+                expected.update(hashlib.sha256((root / rel).read_bytes()).digest())
+            self.assertEqual(fed.content_hash(root), expected.hexdigest())
+
+    def test_hash_skips_excluded_paths_and_build_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = write_skill(Path(tmp) / "skill", {"SKILL.md": "body"})
+            digest = fed.content_hash(root, exclude=[fed.MARKER_FILENAME])
+            write_skill(
+                root,
+                {
+                    fed.MARKER_FILENAME: '{"commit": "abc"}',
+                    "evals/__pycache__/evals.pyc": "junk",
+                },
+            )
+            self.assertEqual(
+                fed.content_hash(root, exclude=[fed.MARKER_FILENAME]), digest
+            )
+
     def test_hash_covers_contents_and_layout(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = write_skill(

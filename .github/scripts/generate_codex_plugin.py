@@ -52,9 +52,7 @@ CODEX_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 # bundle presents in Codex-facing catalogs rather than vendor-neutral identity,
 # so they live here instead of plugin-metadata.json.
 #
-# Codex caps the install-surface title and blurb at 30 characters, which the
-# vendor-neutral `displayName` and `description` both exceed. Claude and Cursor
-# have no such cap and keep the longer copy, so these two are Codex-only.
+# Codex caps the install-surface title and blurb at 30 characters
 DISPLAY_NAME = "AMD"
 SHORT_DESCRIPTION = "Enable AMD's skills ecosystem"
 CATEGORY = "Developer Tools"
@@ -139,8 +137,7 @@ def build_codex_plugin(metadata: dict, bundle: dict) -> dict:
     Identity and discovery fields come from plugin-metadata.json; the curated
     `skills` list and the human-readable long description come from the Claude
     bundle entry so Codex publishes exactly the same skills as the other
-    ecosystems. The install-surface title and blurb are the Codex-specific
-    constants above, since Codex length-caps them.
+    ecosystems.
     """
     author = metadata.get("author") or {}
     developer_name = author.get("name") if isinstance(author, dict) else None
