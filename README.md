@@ -125,8 +125,8 @@ The AMD stack is large and moves fast. ROCm, HIP, Ryzen AI, and framework integr
                 ┌─────────────────────────────────────────────────────┐
                 │                amd/skills (this repo)               │
                 │                                                     │
-                │   skills/         .github/scripts/ .*-plugin/       │
-                │   vendored copies sources.yml      agent manifests  │
+                │   skills/         .github/         .*-plugin/       │
+                │   vendored copies federation.json  agent manifests  │
                 └──────────────────────┬──────────────────────────────┘
                                        │  one install
                                        ▼
@@ -139,6 +139,21 @@ The AMD stack is large and moves fast. ROCm, HIP, Ryzen AI, and framework integr
   rocm-doctor/    cuda-to-hip/    ryzen-ai-tools/   local-ai-app-   product
    gfx-target-...  triton-amd-...  ...               integration/    repos
 ```
+
+[`.github/federation.json`](.github/federation.json) is the whole registry: each
+entry names a source repo and the exact path of every skill folder to vendor
+from it. Sources are tracked at `main` only, so nothing reaches users that the
+owning team has not already merged.
+
+The `federate-skills` workflow runs nightly and on demand. It clones each
+declared repo, compares a content hash of the upstream skill folder against the
+hash recorded in the vendored copy's `.federated.json`, and re-vendors only the
+skills that actually changed. When something did change it regenerates the agent
+manifests, validates the result, and opens a pull request titled `Bump <skill>
+to <short commit>`. A quiet night produces no diff and therefore no pull
+request, so every bump that lands is a reviewed commit.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) to register a repo.
 
 ## Manual installation
 

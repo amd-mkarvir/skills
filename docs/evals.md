@@ -5,7 +5,7 @@
 A skill reaches the catalog after passing three review stages: an eligibility and compliance check, structural screening, and multi-stage agentic testing.
 
 * **Stage 1: Eligibility and compliance** (*maintainer review, on first submission*)
-  * Is the skill eligible, and does the submission follow the contribution guide and its recommendations? An AMD-owned source repo, registered in `sources.yml`, the skill authored upstream rather than hand-edited here, and the writing guidance in [best-practices.md](best-practices.md) applied. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+  * Is the skill eligible, and does the submission follow the contribution guide and its recommendations? An AMD-owned source repo, registered in `.github/federation.json`, the skill authored upstream rather than hand-edited here, and the writing guidance in [best-practices.md](best-practices.md) applied. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 * **Stage 2: Structural screening** (*CI, on every pull request*)
   * Are the files well-formed? Required files, frontmatter, skill-card sections, eval schema, unique case ids, internal links, and manifests in sync. See [skill-requirements.md](skill-requirements.md).
 * **Stage 3: Agentic testing** (*CI, on every pull request*)

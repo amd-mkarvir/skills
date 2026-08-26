@@ -28,9 +28,13 @@ repos are not accepted at this time.
 ## 1. Author the skill in your repo
 
 Each skill is a folder holding a valid `SKILL.md`, a `skill-card.md`, and an
-`evals/evals.json` dataset. Put the folders in a known directory in your repo,
-commonly `skills/` or `.agents/skills/`, and pick a branch for the catalog to
-track.
+`evals/evals.json` dataset. Put the folders anywhere in your repo, commonly
+`skills/` or `.agents/skills/`.
+
+The catalog always tracks your **`main`** branch. That is deliberate: the
+catalog cannot be pointed at a side branch, so what reaches users is what your
+own review process has already merged. Land skill changes on `main` and the
+catalog follows.
 
 Everything ships with the folder, so the requirements and the eval dataset are
 yours to maintain upstream alongside the skill. See
@@ -40,32 +44,49 @@ make it good.
 
 ## 2. Register your source
 
-Edit [`.github/scripts/sources.yml`](.github/scripts/sources.yml) and append an
-entry:
+Add your repo to [`.github/federation.json`](.github/federation.json). Every
+skill is declared individually, by the full path of its folder in your repo, so
+one repo can federate as many skills as it likes from wherever they live:
 
-```yaml
-sources:
-  - name: amd-myproject          # kebab-case source id
-    repo: AMD-Org/MyProject      # must be AMD-owned
-    ref: main                    # branch to track (e.g. main or a release branch)
-    path: skills                 # dir in your repo holding the skill folders
-    license: MIT                 # SPDX id, carried into the marker file
-    skills:
-      - name: my-skill           # folder name in your repo
-        as: myproject-my-skill   # local catalog name: <project>-<skill>
+```json
+{
+  "sources": [
+    {
+      "repo": "AMD-Org/MyProject",
+      "license": "MIT",
+      "skills": [
+        {
+          "path": "skills/my-skill",
+          "as": "myproject-my-skill"
+        },
+        {
+          "path": "tools/agents/skills/other-skill",
+          "as": "myproject-other-skill"
+        }
+      ]
+    }
+  ]
+}
 ```
 
-Use `as:` to namespace skills as `<project>-<skill>` so catalog names stay
-unique.
+| Field | Meaning |
+| --- | --- |
+| `repo` | GitHub `<owner>/<repo>`, must be AMD-owned. Always tracked at `main` |
+| `license` | SPDX id, carried into each vendored copy's marker file |
+| `skills[].path` | Path of the skill folder inside your repo, from the repo root |
+| `skills[].as` | Optional local catalog name; use it to namespace as `<project>-<skill>` so names stay unique |
 
-## 3. Import and validate locally
+There is no ref, branch, or commit field. Federation is `main`-only by design.
 
-The scripts read `sources.yml` from your working tree.
+## 3. Vendor and validate locally
+
+The scripts read `.github/federation.json` from your working tree.
 
 ```bash
-uv run .github/scripts/import_external_skills.py   # vendor into skills/<name>/
-./.github/scripts/publish.sh                       # regenerate the manifests
-./.github/scripts/check.sh                         # validate (same command CI runs)
+uv run .github/scripts/federate_skills.py --check-catalog  # schema only, no clone
+uv run .github/scripts/federate_skills.py                  # vendor into skills/<name>/
+./.github/scripts/publish.sh                               # regenerate the manifests
+./.github/scripts/check.sh                                 # validate (same command CI runs)
 ```
 
 The importer also adds your skill to the published bundle, so there is no
@@ -73,10 +94,9 @@ manifest to edit by hand.
 
 ## 4. Open a pull request
 
-Commit `skills/**`, `.github/scripts/sources.yml`, and the regenerated
-manifests. A maintainer reviews and merges once CI passes. The `validate`
-workflow runs `check.sh`; the `evals` workflow runs your prompts against a real
-agent.
+Commit `.github/federation.json`, `skills/**`, and the regenerated manifests. A
+maintainer reviews and merges once CI passes. The `validate` workflow runs
+`check.sh`; the `evals` workflow runs your prompts against a real agent.
 
 Never hand-edit vendored skills under `skills/`. Changes must come from your
 repo via re-import, or they will be overwritten.
@@ -106,7 +126,13 @@ jobs:
 
 ## Update or remove
 
-Change the skill in your repo and the catalog picks it up on the next import.
-To remove a skill, drop it from `sources.yml`; the importer prunes the vendored
-copy and its bundle entry. Automatic refresh and pruning through nightly
-workflows will be enabled soon.
+Merge the change to `main` in your repo and the catalog picks it up on its own.
+The `federate-skills` workflow runs nightly (and on demand), re-vendors any
+skill whose upstream folder contents changed, and opens a pull request titled
+`Bump <skill> to <short commit>`. A night with no upstream change produces no
+pull request, so the only ones you see are real bumps.
+
+To remove a skill, drop its entry from `.github/federation.json`. Nightly runs
+report the now-undeclared copy but never delete it on their own; a maintainer
+removes it by dispatching `federate-skills` with **prune** enabled, which
+deletes the vendored copy and its bundle entry.

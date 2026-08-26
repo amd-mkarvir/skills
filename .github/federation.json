@@ -1,0 +1,14 @@
+{
+  "sources": [
+    {
+      "repo": "danielholanda/TraceLens",
+      "license": "MIT",
+      "skills": [
+        {
+          "path": "TraceLens/Agent/Analysis/skills/analysis-orchestrator",
+          "as": "tracelens-analysis-orchestrator"
+        }
+      ]
+    }
+  ]
+}

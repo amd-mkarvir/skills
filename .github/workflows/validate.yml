@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - ".github/scripts/**"
+      - ".github/federation.json"
       - "**/*.md"
       - "skills/**"
       - "eval/**"
@@ -98,6 +99,17 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
+
+      # Schema-only check of the federation file: catches a malformed or
+      # mis-keyed source entry on the pull request that adds it, without
+      # cloning anything.
+      - name: Validate federation file
+        run: uv run .github/scripts/federate_skills.py --check-catalog
+
+      # Guards the federation machinery itself: change detection and the
+      # `main`-only rule both fail quietly when broken.
+      - name: Test the federation importer
+        run: uv run .github/scripts/test_federate_skills.py
 
       - name: Validate marketplace manifest
         run: uv run .github/scripts/validate_skills.py --marketplace-only

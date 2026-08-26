@@ -3,16 +3,27 @@
 # requires-python = ">=3.10"
 # dependencies = ["pyyaml>=6.0"]
 # ///
-"""Import skills from external repositories listed in `.github/scripts/sources.yml`.
+"""Vendor skills from the external repositories declared in `.github/federation.json`.
 
-For each source, the script:
+Each entry in that file names a GitHub repo and the exact path of every
+skill folder to vendor from it. Sources are always tracked at `main`: the
+catalog cannot be pointed at an arbitrary branch, tag, or commit, so a
+source repo can never route unreviewed work into the catalog through a
+side branch.
 
-1. Shallow-clones the repo at the pinned `ref` into a temp directory,
-   using sparse-checkout so only the configured `path` is fetched.
-2. Copies each named skill folder into `skills/<skill>/`. When refreshing an
-   existing import, a local `evals/` subdirectory is kept if the upstream
+For each declared skill, the script:
+
+1. Shallow-clones the source repo at `main` into a temp directory, using
+   sparse-checkout so only the declared skill paths are fetched.
+2. Hashes the upstream skill folder and compares it against the hash
+   recorded in the vendored copy's `.federated.json`. A skill whose
+   upstream contents are unchanged is left byte-for-byte as it is on
+   disk, so a run that finds no upstream change produces no diff at all
+   (and therefore no pull request). `--force` re-vendors regardless.
+3. Copies changed skill folders into `skills/<name>/`. When refreshing an
+   existing copy, a local `evals/` subdirectory is kept if the upstream
    skill folder does not ship one (catalog-authored behavioral tests).
-2b. Optionally vendors the skill under a different local catalog name (the
+3b. Optionally vendors the skill under a different local catalog name (the
    `as:` field on a skill entry). Federated skills follow a
    `<projectrepo>-<skill>` naming convention in this catalog (e.g. the
    `analysis-orchestrator` skill from TraceLens is vendored as
@@ -20,49 +31,58 @@ For each source, the script:
    entry, and the SKILL.md `name` frontmatter are all set to the `as:`
    value. The upstream folder name is still used to locate the skill in
    its source repo.
-3. Writes `.federated.json` inside each copy with source metadata so we
-   can tell vendored skills apart from skills authored in this repo.
-4. Rewrites relative markdown links that point outside the copied skill
+4. Writes `.federated.json` inside each copy with the source repo, the
+   tracked ref, the resolved commit, and the content hash, so we can tell
+   vendored skills apart from skills authored in this repo and detect the
+   next real upstream change.
+5. Rewrites relative markdown links that point outside the copied skill
    folder (e.g. `examples/foo.yaml`, `docs/bar.md`) into absolute
    github.com URLs pinned to the imported commit, so the offline link
    checker doesn't flag them as missing local files. Links to files that
    were actually copied into the skill folder are left untouched.
-5. Synthesizes a minimal `skill-card.md` (Description, Owner, License)
+6. Synthesizes a minimal `skill-card.md` (Description, Owner, License)
    from the source metadata when the upstream copy doesn't already ship
    one, so the imported skill satisfies the card validation gate (see
    docs/skill-requirements.md).
-6. Adds each imported skill to the bundle's `skills` array in
+7. Adds each declared skill to the bundle's `skills` array in
    `.claude-plugin/marketplace.json` (as a `./skills/<name>` path) so it
    ships in the single AMD plugin.
-7. Removes any previously imported skill (one with a `.federated.json`)
-   that is no longer listed in `.github/scripts/sources.yml`, and drops it
-   from the bundle's `skills` array.
+8. With `--prune`, removes any previously vendored skill (one with a
+   `.federated.json`) that is no longer declared in
+   `.github/federation.json`, and drops it from the bundle's `skills`
+   array. Pruning is opt-in so that scheduled runs never delete a
+   shipped skill on their own.
 
 Usage:
-    uv run .github/scripts/import_external_skills.py            # write changes
-    uv run .github/scripts/import_external_skills.py --dry-run  # report only
-    uv run .github/scripts/import_external_skills.py --only magpie-kernel-evaluator
+    uv run .github/scripts/federate_skills.py                 # write changes
+    uv run .github/scripts/federate_skills.py --dry-run       # report only
+    uv run .github/scripts/federate_skills.py --check-catalog # validate the file
+    uv run .github/scripts/federate_skills.py --only tracelens-analysis-orchestrator
 
 The `--only` flag (repeatable) restricts the run to the named *local*
 skill folder(s) (the `as:` name when one is set): other skills in the
 catalog are skipped and pruning is limited to the named skills, so
 unrelated federated skills are never removed.
 
-The companion GitHub Actions workflow `import-external-skills` calls this
-script on manual dispatch and opens a pull request with the result.
+`--summary-json PATH` writes a machine-readable record of the run
+(including a ready-made pull request title and body) for the calling
+workflow to consume.
+
+The companion GitHub Actions workflow `federate-skills` runs this script
+nightly and on demand, and opens a pull request with the result.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import posixpath
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -70,7 +90,11 @@ from typing import Iterable
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-CATALOG_FILE = Path(__file__).resolve().parent / "sources.yml"
+CATALOG_FILE = REPO_ROOT / ".github" / "federation.json"
+# Federation tracks source repos at `main` only. Allowing arbitrary refs
+# would let a source repo ship into the catalog from an unreviewed branch,
+# so the branch is a constant here rather than a per-source setting.
+FEDERATED_REF = "main"
 SKILLS_DIR = REPO_ROOT / "skills"
 CLAUDE_MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 MARKER_FILENAME = ".federated.json"
@@ -101,12 +125,27 @@ URI_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
 # description is still available in the vendored SKILL.md.
 MARKETPLACE_DESCRIPTION_MAX = 320
 
+REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+SOURCE_KEYS = {"repo", "license", "skills"}
+SKILL_KEYS = {"path", "as", "marketplace_description"}
+# Keys that used to select a ref in the old YAML catalog. They are rejected
+# with a pointed message rather than ignored, so an entry that tries to track
+# something other than `main` fails loudly instead of silently tracking `main`.
+PINNING_KEYS = {"ref", "branch", "tag", "commit", "rev", "revision"}
+
 
 @dataclass
 class SkillSpec:
-    folder: str
+    """One skill folder to vendor, addressed by its full path in the source repo."""
+
+    path: str
     local_name: str | None = None
     marketplace_description_override: str | None = None
+
+    @property
+    def folder(self) -> str:
+        """Upstream folder name (the last path segment)."""
+        return posixpath.basename(self.path)
 
     @property
     def dest_name(self) -> str:
@@ -116,80 +155,128 @@ class SkillSpec:
 
 @dataclass
 class Source:
-    name: str
     repo: str
-    ref: str
-    path: str
     license: str
-    skills: list[SkillSpec]
+    skills: list[SkillSpec] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        """Stable slug for the source, derived from `owner/repo`."""
+        return re.sub(r"[^a-z0-9]+", "-", self.repo.lower()).strip("-")
+
+    @property
+    def ref(self) -> str:
+        return FEDERATED_REF
 
 
 @dataclass
 class ImportResult:
     source: Source
     folder: str
+    path: str
     commit: str
-    skill_description: str
-    marketplace_description: str
+    updated: bool
+    skill_description: str = ""
+    marketplace_description: str = ""
+
+    @property
+    def short_commit(self) -> str:
+        return self.commit[:7]
 
 
-def parse_sources(catalog: Path) -> list[Source]:
+def parse_federation(catalog: Path) -> list[Source]:
+    """Parse and validate `.github/federation.json`.
+
+    Unknown keys are rejected rather than ignored: the file is hand-edited by
+    contributors registering a skill, and a typo that silently vendors the
+    wrong thing (or nothing) is worse than a failed run.
+    """
     if not catalog.exists():
-        raise FileNotFoundError(f"Catalog file not found: {catalog}")
-    data = yaml.safe_load(catalog.read_text(encoding="utf-8")) or {}
+        raise FileNotFoundError(f"Federation file not found: {catalog}")
+    try:
+        data = json.loads(catalog.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{catalog} is not valid JSON: {exc}") from None
+    if not isinstance(data, dict):
+        raise ValueError(f"{catalog} must contain a JSON object.")
     raw_sources = data.get("sources")
     if not isinstance(raw_sources, list) or not raw_sources:
-        raise ValueError(f"{catalog} must define a non-empty `sources` list.")
+        raise ValueError(f"{catalog} must define a non-empty `sources` array.")
 
     sources: list[Source] = []
     for idx, raw in enumerate(raw_sources):
+        where = f"sources[{idx}]"
         if not isinstance(raw, dict):
-            raise ValueError(f"sources[{idx}] must be a mapping.")
-        try:
-            name = raw["name"]
-            repo = raw["repo"]
-            ref = raw["ref"]
-            path = raw["path"]
-        except KeyError as exc:
+            raise ValueError(f"{where} must be an object.")
+        pinning = PINNING_KEYS & set(raw)
+        if pinning:
             raise ValueError(
-                f"sources[{idx}] is missing required key: {exc.args[0]!r}"
-            ) from None
+                f"{where} sets {sorted(pinning)}, but federated sources are "
+                f"always tracked at {FEDERATED_REF!r}. Remove the key and land "
+                "the change on your default branch instead."
+            )
+        unknown = set(raw) - SOURCE_KEYS
+        if unknown:
+            raise ValueError(
+                f"{where} has unknown key(s) {sorted(unknown)}; expected "
+                f"{sorted(SOURCE_KEYS)}."
+            )
+        repo = raw.get("repo")
+        if not isinstance(repo, str) or not REPO_RE.match(repo):
+            raise ValueError(
+                f'{where}.repo must be a GitHub "<owner>/<repo>" string, got '
+                f"{repo!r}."
+            )
 
-        license_str = raw.get("license", "UNKNOWN")
-        skills_raw = raw.get("skills") or []
+        skills_raw = raw.get("skills")
         if not isinstance(skills_raw, list) or not skills_raw:
             raise ValueError(
-                f"sources[{idx}] ({name!r}) must list at least one skill under "
-                "`skills:`."
+                f"{where} ({repo}) must list at least one skill under `skills`."
             )
 
         skills: list[SkillSpec] = []
         for sk_idx, sk in enumerate(skills_raw):
-            if isinstance(sk, str):
-                skills.append(SkillSpec(folder=sk))
-            elif isinstance(sk, dict) and "name" in sk:
-                skills.append(
-                    SkillSpec(
-                        folder=sk["name"],
-                        local_name=sk.get("as"),
-                        marketplace_description_override=sk.get(
-                            "marketplace_description"
-                        ),
-                    )
-                )
-            else:
+            sk_where = f"{where}.skills[{sk_idx}]"
+            if not isinstance(sk, dict):
                 raise ValueError(
-                    f"sources[{idx}].skills[{sk_idx}] must be a string or a "
-                    "mapping with at least a `name` key."
+                    f"{sk_where} must be an object with a `path` key. Every "
+                    "skill in a repo is declared individually."
                 )
+            unknown = set(sk) - SKILL_KEYS
+            if unknown:
+                raise ValueError(
+                    f"{sk_where} has unknown key(s) {sorted(unknown)}; expected "
+                    f"{sorted(SKILL_KEYS)}."
+                )
+            path = sk.get("path")
+            if not isinstance(path, str) or not path.strip("/"):
+                raise ValueError(
+                    f"{sk_where}.path must be the skill folder's path inside "
+                    f'{repo}, e.g. "skills/my-skill".'
+                )
+            path = path.replace("\\", "/").strip("/")
+            if ".." in path.split("/"):
+                raise ValueError(f"{sk_where}.path must not contain '..': {path!r}")
+            local_name = sk.get("as")
+            if local_name is not None and (
+                not isinstance(local_name, str) or "/" in local_name
+            ):
+                raise ValueError(
+                    f"{sk_where}.as must be a plain local folder name, got "
+                    f"{local_name!r}."
+                )
+            skills.append(
+                SkillSpec(
+                    path=path,
+                    local_name=local_name,
+                    marketplace_description_override=sk.get("marketplace_description"),
+                )
+            )
 
         sources.append(
             Source(
-                name=name,
                 repo=repo,
-                ref=ref,
-                path=path.strip("/"),
-                license=license_str,
+                license=raw.get("license") or "UNKNOWN",
                 skills=skills,
             )
         )
@@ -208,12 +295,17 @@ def run(cmd: list[str], cwd: Path | None = None) -> str:
     return result.stdout.strip()
 
 
-def shallow_clone(repo: str, ref: str, sub_path: str, dest: Path) -> str:
-    """Sparse + shallow clone `repo` at `ref`, restricted to `sub_path`.
+def shallow_clone(repo: str, sub_paths: Iterable[str], dest: Path) -> str:
+    """Sparse + blobless clone of `repo` at `main`, restricted to `sub_paths`.
 
     Returns the resolved commit SHA. Sparse-checkout avoids pulling the
-    whole repo when only one sub-tree is needed (the AMD-AGI/Apex tree is
-    large; we only want `tools/skills`).
+    whole repo when only a few sub-trees are needed (the AMD-AGI/Apex tree
+    is large; we only want `tools/skills`).
+
+    Line endings are forced to LF so the checkout is byte-identical
+    everywhere: the content hashes computed from it drive change detection,
+    and they must mean the same thing on a maintainer's Windows machine and
+    on a Linux runner.
     """
     url = f"https://github.com/{repo}.git"
     run(
@@ -227,10 +319,29 @@ def shallow_clone(repo: str, ref: str, sub_path: str, dest: Path) -> str:
             str(dest),
         ]
     )
-    run(["git", "sparse-checkout", "set", "--cone", sub_path], cwd=dest)
-    # `git checkout <ref>` resolves branches, tags, and full commit SHAs.
-    run(["git", "checkout", ref], cwd=dest)
+    run(["git", "config", "core.autocrlf", "false"], cwd=dest)
+    run(["git", "config", "core.eol", "lf"], cwd=dest)
+    run(["git", "sparse-checkout", "set", "--cone", *sub_paths], cwd=dest)
+    run(["git", "checkout", FEDERATED_REF], cwd=dest)
     return run(["git", "rev-parse", "HEAD"], cwd=dest)
+
+
+def content_hash(skill_dir: Path) -> str:
+    """Hash every file under `skill_dir` (relative paths and bytes).
+
+    Change detection compares this against the hash stored in the vendored
+    copy's marker, so a skill is re-vendored when its upstream folder's
+    contents change, not merely when its source repo gets some unrelated
+    commit. Without that distinction every commit to a large product repo
+    would churn the vendored copies (the marker and the commit-pinned links)
+    and open a pull request with no substance in it.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(p for p in skill_dir.rglob("*") if p.is_file()):
+        digest.update(path.relative_to(skill_dir).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
 
 
 def list_repo_files(clone_dir: Path, commit: str) -> set[str]:
@@ -354,6 +465,22 @@ def truncate_description(text: str, limit: int = MARKETPLACE_DESCRIPTION_MAX) ->
     return cut.rstrip(",;:") + "…"
 
 
+def read_marker(skill_dir: Path) -> dict:
+    """Parse a vendored skill's `.federated.json`, or return {} if absent.
+
+    A corrupt marker reads as {} so the next run re-vendors the skill and
+    rewrites the marker cleanly.
+    """
+    marker = skill_dir / MARKER_FILENAME
+    if not marker.exists():
+        return {}
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def find_federated_skills() -> dict[str, dict]:
     """Return {skill_folder_name: parsed marker JSON} for every existing
     skill that has a `.federated.json` marker."""
@@ -363,15 +490,31 @@ def find_federated_skills() -> dict[str, dict]:
     for skill_dir in SKILLS_DIR.iterdir():
         if not skill_dir.is_dir() or skill_dir.name.startswith("."):
             continue
-        marker = skill_dir / MARKER_FILENAME
-        if marker.exists():
-            try:
-                found[skill_dir.name] = json.loads(marker.read_text(encoding="utf-8"))
-            except json.JSONDecodeError:
-                # Treat a corrupt marker as "managed by this script" so the
-                # next run will overwrite or remove it cleanly.
-                found[skill_dir.name] = {}
+        if (skill_dir / MARKER_FILENAME).exists():
+            found[skill_dir.name] = read_marker(skill_dir)
     return found
+
+
+def is_up_to_date(
+    marker: dict,
+    source: Source,
+    spec: SkillSpec,
+    upstream_hash: str,
+) -> bool:
+    """True when the vendored copy already matches this upstream folder.
+
+    The repo and path are compared alongside the hash because they change
+    what the vendored copy should contain: markdown links are rewritten to
+    absolute URLs under the source repo, so re-pointing a skill at a
+    different repo or path has to re-vendor even if the files are identical.
+    """
+    return (
+        bool(upstream_hash)
+        and marker.get("content_hash") == upstream_hash
+        and marker.get("repo") == source.repo
+        and marker.get("path") == spec.path
+        and marker.get("ref") == FEDERATED_REF
+    )
 
 
 def copy_skill(src: Path, dest: Path, log: list[str] | None = None) -> None:
@@ -399,6 +542,7 @@ def write_marker(
     source: Source,
     commit: str,
     relative_path: str,
+    upstream_hash: str,
 ) -> None:
     marker = {
         "source": source.name,
@@ -407,6 +551,7 @@ def write_marker(
         "commit": commit,
         "path": relative_path,
         "license": source.license,
+        "content_hash": upstream_hash,
         "imported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     (skill_dir / MARKER_FILENAME).write_text(
@@ -477,9 +622,9 @@ def update_publish_list(
     """Sync the bundle's `skills` array in `.claude-plugin/marketplace.json`.
 
     AMD ships a single curated plugin whose `skills` array lists the published
-    skills as `./skills/<name>` paths. Newly imported federated skills are added
+    skills as `./skills/<name>` paths. Newly vendored federated skills are added
     so they ship in the bundle, and skills that were pruned from
-    `.github/scripts/sources.yml` are removed. The existing curation order is
+    `.github/federation.json` are removed. The existing curation order is
     preserved; freshly added skills are appended in sorted order for a
     deterministic diff.
 
@@ -522,39 +667,58 @@ def update_publish_list(
 def import_source(
     source: Source,
     dry_run: bool,
+    force: bool,
     log: list[str],
 ) -> list[ImportResult]:
     results: list[ImportResult] = []
     with tempfile.TemporaryDirectory(prefix="amd-skills-import-") as tmpdir:
         tmp_path = Path(tmpdir) / source.name
         log.append(f"[{source.name}] cloning {source.repo}@{source.ref}")
-        commit = shallow_clone(source.repo, source.ref, source.path, tmp_path)
+        commit = shallow_clone(
+            source.repo, [spec.path for spec in source.skills], tmp_path
+        )
         log.append(f"[{source.name}] resolved to commit {commit}")
         repo_files = list_repo_files(tmp_path, commit)
 
-        src_root = tmp_path / source.path
-        if not src_root.is_dir():
-            raise FileNotFoundError(
-                f"Path {source.path!r} not found in {source.repo}@{source.ref}."
-            )
-
         for spec in source.skills:
-            src_skill = src_root / spec.folder
+            src_skill = tmp_path / spec.path
             if not src_skill.is_dir():
                 raise FileNotFoundError(
-                    f"Skill {spec.folder!r} not found under "
-                    f"{source.repo}/{source.path}@{source.ref}."
+                    f"Skill path {spec.path!r} not found in "
+                    f"{source.repo}@{source.ref}."
                 )
             skill_md = src_skill / "SKILL.md"
             if not skill_md.exists():
                 raise FileNotFoundError(
-                    f"Skill {spec.folder!r} from {source.repo} has no SKILL.md."
+                    f"Skill {spec.path!r} from {source.repo} has no SKILL.md."
                 )
+
+            dest_name = spec.dest_name
+            dest_skill = SKILLS_DIR / dest_name
+            upstream_hash = content_hash(src_skill)
+            if not force and is_up_to_date(
+                read_marker(dest_skill), source, spec, upstream_hash
+            ):
+                log.append(
+                    f"[{source.name}] skills/{dest_name} is up to date "
+                    f"(unchanged upstream); left untouched"
+                )
+                results.append(
+                    ImportResult(
+                        source=source,
+                        folder=dest_name,
+                        path=spec.path,
+                        commit=read_marker(dest_skill).get("commit", commit),
+                        updated=False,
+                    )
+                )
+                continue
+
             frontmatter = parse_frontmatter(skill_md.read_text(encoding="utf-8"))
             description = frontmatter.get("description") or ""
             if not isinstance(description, str) or not description.strip():
                 raise ValueError(
-                    f"Skill {spec.folder!r} from {source.repo} has no "
+                    f"Skill {spec.path!r} from {source.repo} has no "
                     "non-empty `description` in its SKILL.md frontmatter."
                 )
             marketplace_description = (
@@ -562,25 +726,19 @@ def import_source(
                 or truncate_description(description)
             )
 
-            dest_name = spec.dest_name
-            dest_skill = SKILLS_DIR / dest_name
-            # The marker records the skill's *upstream* location, which keeps
-            # using the source folder name even when we vendor it locally as
-            # `dest_name`.
-            relative_path = f"{source.path}/{spec.folder}"
-            action = "would import" if dry_run else "importing"
+            action = "would vendor" if dry_run else "vendoring"
             renamed = f" (as {dest_name})" if dest_name != spec.folder else ""
             log.append(
-                f"[{source.name}] {action} {spec.folder} -> skills/{dest_name}{renamed}"
+                f"[{source.name}] {action} {spec.path} -> skills/{dest_name}{renamed}"
             )
             if not dry_run:
                 copy_skill(src_skill, dest_skill, log)
-                write_marker(dest_skill, source, commit, relative_path)
+                write_marker(dest_skill, source, commit, spec.path, upstream_hash)
                 write_card(dest_skill, source, marketplace_description)
                 rewrite_skill_name(dest_skill, dest_name, log)
                 rewrite_external_references(
                     dest_skill,
-                    relative_path,
+                    spec.path,
                     repo_files,
                     source.repo,
                     commit,
@@ -591,7 +749,9 @@ def import_source(
                 ImportResult(
                     source=source,
                     folder=dest_name,
+                    path=spec.path,
                     commit=commit,
+                    updated=True,
                     skill_description=description.strip(),
                     marketplace_description=marketplace_description,
                 )
@@ -619,6 +779,97 @@ def prune_orphans(
     return removed
 
 
+def commit_url(repo: str, commit: str) -> str:
+    return f"https://github.com/{repo}/commit/{commit}"
+
+
+def pr_title(updated: list[ImportResult], removed: list[str]) -> str:
+    """Compose the pull request title for a run.
+
+    A single bumped skill — the common nightly case — reads
+    "Bump <skill> to <short commit>".
+    """
+    if updated and not removed:
+        if len(updated) == 1:
+            result = updated[0]
+            return f"Bump {result.folder} to {result.short_commit}"
+        return f"Bump {len(updated)} federated skills"
+    if removed and not updated:
+        if len(removed) == 1:
+            return f"Remove federated skill {removed[0]}"
+        return f"Remove {len(removed)} federated skills"
+    if updated and removed:
+        return (
+            f"Update federated skills ({len(updated)} bumped, "
+            f"{len(removed)} removed)"
+        )
+    return ""
+
+
+def pr_body(
+    updated: list[ImportResult],
+    unchanged: list[ImportResult],
+    removed: list[str],
+) -> str:
+    lines = [
+        "Automated federation refresh driven by `.github/federation.json`.",
+        "",
+        f"Every source is tracked at `{FEDERATED_REF}`, and a skill is "
+        "re-vendored only when the contents of its upstream folder change.",
+    ]
+    if updated:
+        lines += ["", "**Bumped**", ""]
+        for result in sorted(updated, key=lambda r: r.folder):
+            lines.append(
+                f"- `{result.folder}` to "
+                f"[`{result.short_commit}`]"
+                f"({commit_url(result.source.repo, result.commit)}) "
+                f"from `{result.source.repo}/{result.path}`"
+            )
+    if removed:
+        lines += ["", "**Removed** (no longer declared in `.github/federation.json`)", ""]
+        for name in sorted(removed):
+            lines.append(f"- `{name}`")
+    if unchanged:
+        lines += ["", "**Unchanged**", ""]
+        for result in sorted(unchanged, key=lambda r: r.folder):
+            lines.append(f"- `{result.folder}`")
+    lines += [
+        "",
+        "Each vendored skill carries a `.federated.json` marker recording the "
+        "source repo, the tracked ref, the resolved commit, and the content "
+        "hash used for change detection.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def build_summary(
+    results: list[ImportResult],
+    removed: list[str],
+) -> dict:
+    """Machine-readable record of the run for the calling workflow."""
+    updated = [r for r in results if r.updated]
+    unchanged = [r for r in results if not r.updated]
+    return {
+        "ref": FEDERATED_REF,
+        "changed": bool(updated or removed),
+        "title": pr_title(updated, removed),
+        "body": pr_body(updated, unchanged, removed),
+        "updated": [
+            {
+                "skill": r.folder,
+                "repo": r.source.repo,
+                "path": r.path,
+                "commit": r.commit,
+                "short_commit": r.short_commit,
+            }
+            for r in sorted(updated, key=lambda r: r.folder)
+        ],
+        "unchanged": sorted(r.folder for r in unchanged),
+        "removed": sorted(removed),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -630,22 +881,71 @@ def main(argv: list[str] | None = None) -> int:
         "--catalog",
         type=Path,
         default=CATALOG_FILE,
-        help=f"Path to the catalog file (default: {CATALOG_FILE}).",
+        help=f"Path to the federation file (default: {CATALOG_FILE}).",
+    )
+    parser.add_argument(
+        "--check-catalog",
+        action="store_true",
+        help=(
+            "Validate the federation file and print what it declares, "
+            "without cloning anything."
+        ),
     )
     parser.add_argument(
         "--only",
         action="append",
         metavar="SKILL",
         help=(
-            "Import only the named skill folder (repeatable). When set, "
+            "Vendor only the named skill folder (repeatable). When set, "
             "skills not named here are left untouched and pruning is "
             "restricted to the named skills, so other federated skills are "
             "never removed."
         ),
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Re-vendor every declared skill even when its upstream contents "
+            "are unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help=(
+            "Delete vendored skills that are no longer declared in the "
+            "federation file. Off by default so a scheduled run cannot "
+            "remove a shipped skill on its own."
+        ),
+    )
+    parser.add_argument(
+        "--summary-json",
+        type=Path,
+        metavar="PATH",
+        help="Write a JSON summary of the run (including a PR title and body).",
+    )
     args = parser.parse_args(argv)
 
-    sources = parse_sources(args.catalog)
+    sources = parse_federation(args.catalog)
+
+    if args.check_catalog:
+        seen: set[str] = set()
+        for source in sources:
+            for spec in source.skills:
+                if spec.dest_name in seen:
+                    raise ValueError(
+                        f"Skill name collision: {spec.dest_name!r} is declared "
+                        f"more than once in {args.catalog}."
+                    )
+                seen.add(spec.dest_name)
+                print(
+                    f"{source.repo}@{FEDERATED_REF} {spec.path} "
+                    f"-> skills/{spec.dest_name}"
+                )
+        print("")
+        print(f"{args.catalog} is valid: {len(seen)} skill(s) declared.")
+        return 0
 
     only = set(args.only or [])
     if only:
@@ -670,35 +970,58 @@ def main(argv: list[str] | None = None) -> int:
         for spec in source.skills:
             if spec.dest_name in declared:
                 raise ValueError(
-                    f"Skill name collision: {spec.dest_name!r} is listed by "
-                    "more than one source in .github/scripts/sources.yml."
+                    f"Skill name collision: {spec.dest_name!r} is declared by "
+                    f"more than one source in {args.catalog}."
                 )
             declared.add(spec.dest_name)
-        all_results.extend(import_source(source, args.dry_run, log))
+        all_results.extend(import_source(source, args.dry_run, args.force, log))
 
-    # With --only we deliberately ignore skills the user didn't name, so
-    # restrict orphan pruning to just those skills. Otherwise every other
-    # federated skill would look like an orphan and be deleted.
-    prunable = (
-        {name: marker for name, marker in existing_federated.items() if name in only}
-        if only
-        else existing_federated
-    )
-    pruned = prune_orphans(declared, prunable, args.dry_run, log)
-    imported_names = {result.folder for result in all_results}
-    publish_changed = update_publish_list(imported_names, pruned, args.dry_run)
+    if args.prune:
+        # With --only we deliberately ignore skills the user didn't name, so
+        # restrict orphan pruning to just those skills. Otherwise every other
+        # federated skill would look like an orphan and be deleted.
+        prunable = (
+            {
+                name: marker
+                for name, marker in existing_federated.items()
+                if name in only
+            }
+            if only
+            else existing_federated
+        )
+        pruned = prune_orphans(declared, prunable, args.dry_run, log)
+    else:
+        pruned = []
+        undeclared = sorted(set(existing_federated) - declared)
+        for name in undeclared:
+            log.append(
+                f"[orphan] skills/{name} is vendored but not declared in "
+                f"{args.catalog.name}; re-run with --prune to remove it"
+            )
+
+    publish_changed = update_publish_list(declared, pruned, args.dry_run)
 
     for line in log:
         print(line)
 
+    summary = build_summary(all_results, pruned)
+    if args.summary_json:
+        args.summary_json.parent.mkdir(parents=True, exist_ok=True)
+        args.summary_json.write_text(
+            json.dumps(summary, indent=2) + "\n", encoding="utf-8"
+        )
+
     print("")
-    print(f"Imported: {len(all_results)} skill(s)")
+    print(f"Bumped: {len(summary['updated'])} skill(s)")
+    print(f"Already up to date: {len(summary['unchanged'])} skill(s)")
     print(f"Removed orphans: {len(pruned)}")
     print(
         "Publish list: "
         f"{'changed' if publish_changed else 'unchanged'}"
         f"{' (dry run)' if args.dry_run and publish_changed else ''}"
     )
+    if summary["title"]:
+        print(f"Pull request title: {summary['title']}")
     return 0
 
 
