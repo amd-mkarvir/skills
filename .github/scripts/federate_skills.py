@@ -303,11 +303,22 @@ def shallow_clone(repo: str, sub_paths: Iterable[str], dest: Path) -> str:
     everywhere: the content hashes computed from it drive change detection,
     and they must mean the same thing on a maintainer's Windows machine and
     on a Linux runner.
+
+    Background maintenance is disabled because it outlives the clone: a
+    blobless clone hands commit-graph writing to a detached process that
+    keeps creating files under `.git/objects/info/`, which then races the
+    removal of the temp directory this clone lives in.
     """
     url = f"https://github.com/{repo}.git"
     run(
         [
             "git",
+            "-c",
+            "gc.auto=0",
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "fetch.writeCommitGraph=false",
             "clone",
             "--filter=blob:none",
             "--sparse",
@@ -659,7 +670,12 @@ def import_source(
     log: list[str],
 ) -> list[ImportResult]:
     results: list[ImportResult] = []
-    with tempfile.TemporaryDirectory(prefix="amd-skills-import-") as tmpdir:
+    # A failed cleanup must not fail the run: everything of value has already
+    # been copied out by then, and leaving a temp directory behind is cheaper
+    # than a red nightly job.
+    with tempfile.TemporaryDirectory(
+        prefix="amd-skills-import-", ignore_cleanup_errors=True
+    ) as tmpdir:
         tmp_path = Path(tmpdir) / source.name
         log.append(f"[{source.name}] cloning {source.repo}@{source.ref}")
         commit = shallow_clone(
