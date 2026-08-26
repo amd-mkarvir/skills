@@ -123,6 +123,32 @@ class TestFederationFile(unittest.TestCase):
         self.assertEqual(skills[0].path, "TraceLens/Agent/skills/orchestrator")
 
 
+class TestVendoredCopy(unittest.TestCase):
+    def test_files_absent_upstream_are_deleted_from_the_vendored_copy(self):
+        # The vendored folder mirrors upstream, so a re-import is also how a
+        # deletion propagates. `evals/` is the case that matters: it used to
+        # survive a re-import, which quietly left the catalog holding a
+        # dataset the skill's own repo had dropped or never had.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = write_skill(
+                Path(tmp) / "src", {"SKILL.md": "new", "agents/one.md": "x"}
+            )
+            dest = write_skill(
+                Path(tmp) / "dest",
+                {
+                    "SKILL.md": "old",
+                    "evals/evals.json": "{}",
+                    "stale.md": "gone",
+                },
+            )
+            fed.copy_skill(src, dest)
+            self.assertEqual(
+                sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*")),
+                ["SKILL.md", "agents", "agents/one.md"],
+            )
+            self.assertEqual((dest / "SKILL.md").read_text(encoding="utf-8"), "new")
+
+
 class TestChangeDetection(unittest.TestCase):
     def test_hash_order_does_not_depend_on_the_platform(self):
         # `sorted()` over Path objects is case-insensitive on Windows, so it

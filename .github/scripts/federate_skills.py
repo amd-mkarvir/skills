@@ -23,9 +23,10 @@ For each declared skill, the script:
    the resulting files match the copy already on disk, the previous
    marker is restored, because a diff consisting only of a commit and a
    hash is noise. Deleting a marker forces that skill to be re-vendored.
-3. Copies changed skill folders into `skills/<name>/`. When refreshing an
-   existing copy, a local `evals/` subdirectory is kept if the upstream
-   skill folder does not ship one (catalog-authored behavioral tests).
+3. Copies changed skill folders into `skills/<name>/` as an exact mirror
+   of upstream. Anything the source repo does not ship is removed,
+   including an `evals/` dataset that only exists here: a skill's owner
+   cannot review or maintain a file that lives only in the catalog.
 3b. Optionally vendors the skill under a different local catalog name (the
    `as:` field on a skill entry). Federated skills follow a
    `<projectrepo>-<skill>` naming convention in this catalog (e.g. the
@@ -102,8 +103,6 @@ MARKER_FILENAME = ".federated.json"
 # hashing them would make change detection depend on whether someone happened
 # to run the tests before the importer.
 IGNORED_DIR_NAMES = {"__pycache__", ".pytest_cache"}
-# Local-only subdirectories preserved across re-import when absent upstream.
-PRESERVE_IF_ABSENT_UPSTREAM = ("evals",)
 # The bundle references each published skill as `./skills/<name>` in the
 # marketplace plugin entry's `skills` array.
 SKILLS_PATH_PREFIX = "./skills/"
@@ -551,24 +550,17 @@ def is_up_to_date(
     )
 
 
-def copy_skill(src: Path, dest: Path, log: list[str] | None = None) -> None:
-    with tempfile.TemporaryDirectory(prefix="amd-skills-preserve-") as tmpdir:
-        preserved: dict[str, Path] = {}
-        if dest.exists():
-            for subdir in PRESERVE_IF_ABSENT_UPSTREAM:
-                local_subdir = dest / subdir
-                if local_subdir.is_dir() and not (src / subdir).exists():
-                    preserved_path = Path(tmpdir) / subdir
-                    shutil.copytree(local_subdir, preserved_path)
-                    preserved[subdir] = preserved_path
-            shutil.rmtree(dest)
-        shutil.copytree(src, dest)
-        for subdir, preserved_path in preserved.items():
-            shutil.copytree(preserved_path, dest / subdir)
-            if log is not None:
-                log.append(
-                    f"    preserved local {subdir}/ (absent in upstream import)"
-                )
+def copy_skill(src: Path, dest: Path) -> None:
+    """Replace `dest` with an exact copy of the upstream skill folder.
+
+    The vendored copy is a mirror: anything upstream does not ship is
+    removed, including a local `evals/` dataset. A file that exists only in
+    the catalog cannot be reviewed or maintained by the team that owns the
+    skill, so the source repo is the only place it can come from.
+    """
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest)
 
 
 def write_marker(
@@ -770,7 +762,7 @@ def import_source(
                 else None
             )
 
-            copy_skill(src_skill, dest_skill, log)
+            copy_skill(src_skill, dest_skill)
             write_marker(dest_skill, source, commit, spec.path, upstream_hash)
             write_card(dest_skill, source, marketplace_description)
             rewrite_skill_name(dest_skill, dest_name, log)
