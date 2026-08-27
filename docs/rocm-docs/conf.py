@@ -12,7 +12,11 @@ copyright = "Copyright (c) Advanced Micro Devices, Inc. All rights reserved."
 # -- General configuration -------------------------------------------------
 
 html_theme = "rocm_docs_theme"
-html_theme_options = {"flavor": "rocm"}
+html_theme_options = {
+    "flavor": "rocm-ai",
+    "use_repository_button": True,
+    "use_download_button": True,
+}
 html_title = "AMD Skills documentation"
 suppress_warnings = ["etoc.toctree"]
 external_toc_path = "./sphinx/_toc.yml"
