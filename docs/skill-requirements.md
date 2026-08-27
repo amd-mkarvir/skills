@@ -33,7 +33,8 @@ The frontmatter must be a valid YAML block containing `name` and `description`.
 | body | ≤ 500 lines |
 
 Catalog names are namespaced `<project>-<skill>` to stay unique. You do not
-have to rename your upstream folder for that: set `as:` in `sources.yml` and
+have to rename your upstream folder for that: set `as` in
+`.github/federation.json` and
 the importer rewrites the folder name and the `name` frontmatter together, so
 they still match after vendoring.
 
