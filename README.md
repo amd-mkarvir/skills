@@ -154,6 +154,10 @@ where the usual `validate` checks apply as they would to any other pull
 request. A quiet night produces no diff and therefore no pull request, so every
 bump that lands is a reviewed commit.
 
+A vendored skill mirrors its upstream folder with one exception: for now
+federation does not carry the skill's `evals/` folder in either direction, so
+the datasets this repo grades skills against live and are maintained here.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) to register a repo.
 
 ## Manual installation

@@ -12,7 +12,7 @@ A skill reaches the catalog after passing three review stages: an eligibility an
   * **Routing Testing**: Does the skill trigger when it should, and stay quiet when it shouldn't? Prompts run with the published bundle installed side by side, so a skill only wins the ones it owns. You cannot test this alone: a skill tested by itself will happily answer prompts that belong to its neighbour.
   * **Behavioral Testing**: Once the skill has triggered, does it do the job? The prompt runs to completion with the skill loaded, and what the agent actually did is graded against the expectations in the dataset.
 
-The rest of this document is the dataset that structural screening and agentic testing read. You write one file, `evals/evals.json`, inside your skill folder. It ships with the skill from your repo and is vendored into the catalog along with everything else. Copy [`eval/TEMPLATE.json`](../eval/TEMPLATE.json) to start.
+The rest of this document is the dataset that structural screening and agentic testing read. You write one file, `evals/evals.json`, inside your skill folder in this catalog. For now `evals/` is the one folder federation does not carry, so unlike the rest of a federated skill the dataset is authored and edited here rather than imported from your repo, and a re-import never overwrites it. Copy [`eval/TEMPLATE.json`](../eval/TEMPLATE.json) to start.
 
 ## What skill owners write
 

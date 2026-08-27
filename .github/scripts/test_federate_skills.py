@@ -126,20 +126,13 @@ class TestFederationFile(unittest.TestCase):
 class TestVendoredCopy(unittest.TestCase):
     def test_files_absent_upstream_are_deleted_from_the_vendored_copy(self):
         # The vendored folder mirrors upstream, so a re-import is also how a
-        # deletion propagates. `evals/` is the case that matters: it used to
-        # survive a re-import, which quietly left the catalog holding a
-        # dataset the skill's own repo had dropped or never had.
+        # deletion propagates.
         with tempfile.TemporaryDirectory() as tmp:
             src = write_skill(
                 Path(tmp) / "src", {"SKILL.md": "new", "agents/one.md": "x"}
             )
             dest = write_skill(
-                Path(tmp) / "dest",
-                {
-                    "SKILL.md": "old",
-                    "evals/evals.json": "{}",
-                    "stale.md": "gone",
-                },
+                Path(tmp) / "dest", {"SKILL.md": "old", "stale.md": "gone"}
             )
             fed.copy_skill(src, dest)
             self.assertEqual(
@@ -147,6 +140,37 @@ class TestVendoredCopy(unittest.TestCase):
                 ["SKILL.md", "agents", "agents/one.md"],
             )
             self.assertEqual((dest / "SKILL.md").read_text(encoding="utf-8"), "new")
+
+    def test_evals_are_outside_federation_in_both_directions(self):
+        # The catalog owns and runs the datasets, so a re-import must neither
+        # delete the local `evals/` nor import upstream's over it. Both halves
+        # fail silently: a wiped dataset only shows up as an eval that stopped
+        # running, and an imported one as expectations nobody here wrote.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = write_skill(
+                Path(tmp) / "src",
+                {"SKILL.md": "new", "evals/evals.json": '{"upstream": true}'},
+            )
+            dest = write_skill(
+                Path(tmp) / "dest",
+                {"SKILL.md": "old", "evals/evals.json": '{"local": true}'},
+            )
+            fed.copy_skill(src, dest)
+            self.assertEqual(
+                (dest / "evals" / "evals.json").read_text(encoding="utf-8"),
+                '{"local": true}',
+            )
+
+    def test_a_nested_evals_folder_is_ordinary_content(self):
+        # Only the skill's own top-level `evals/` is the catalog's; a folder
+        # of the same name deeper in the tree is upstream's to ship.
+        with tempfile.TemporaryDirectory() as tmp:
+            src = write_skill(
+                Path(tmp) / "src", {"SKILL.md": "new", "agents/evals/notes.md": "x"}
+            )
+            dest = write_skill(Path(tmp) / "dest", {"SKILL.md": "old"})
+            fed.copy_skill(src, dest)
+            self.assertTrue((dest / "agents" / "evals" / "notes.md").is_file())
 
 
 class TestChangeDetection(unittest.TestCase):
@@ -181,6 +205,19 @@ class TestChangeDetection(unittest.TestCase):
             self.assertEqual(
                 fed.content_hash(root, exclude=[fed.MARKER_FILENAME]), digest
             )
+
+    def test_hash_ignores_the_skills_own_evals_folder(self):
+        # Federation does not move `evals/` any more, so an upstream edit
+        # there must not re-vendor the skill, and the local dataset must not
+        # make the vendored copy look stale on every run.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = write_skill(Path(tmp) / "skill", {"SKILL.md": "body"})
+            digest = fed.content_hash(root)
+            write_skill(root, {"evals/evals.json": '{"evaluations": []}'})
+            self.assertEqual(fed.content_hash(root), digest)
+            # Same name, but nested: that is upstream's content and counts.
+            write_skill(root, {"agents/evals/notes.md": "x"})
+            self.assertNotEqual(fed.content_hash(root), digest)
 
     def test_hash_covers_contents_and_layout(self):
         with tempfile.TemporaryDirectory() as tmp:

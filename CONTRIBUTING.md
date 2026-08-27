@@ -36,8 +36,8 @@ catalog cannot be pointed at a side branch, so what reaches users is what your
 own review process has already merged. Land skill changes on `main` and the
 catalog follows.
 
-Everything ships with the folder, so the requirements and the eval dataset are
-yours to maintain upstream alongside the skill. See
+Everything in the folder ships, so the requirements are yours to maintain
+upstream alongside the skill. See
 [docs/skill-requirements.md](docs/skill-requirements.md) for what a valid skill
 must contain and [docs/best-practices.md](docs/best-practices.md) for how to
 make it good.

@@ -23,10 +23,11 @@ For each declared skill, the script:
    the resulting files match the copy already on disk, the previous
    marker is restored, because a diff consisting only of a commit and a
    hash is noise. Deleting a marker forces that skill to be re-vendored.
-3. Copies changed skill folders into `skills/<name>/` as an exact mirror
-   of upstream. Anything the source repo does not ship is removed,
-   including an `evals/` dataset that only exists here: a skill's owner
-   cannot review or maintain a file that lives only in the catalog.
+3. Copies changed skill folders into `skills/<name>/` as a mirror of
+   upstream, except for the skill's top-level `evals/` folder, which is
+   outside federation entirely: upstream's copy is never imported and the
+   catalog's copy is never touched. Anything else the source repo does not
+   ship is removed.
 3b. Optionally vendors the skill under a different local catalog name (the
    `as:` field on a skill entry). Federated skills follow a
    `<projectrepo>-<skill>` naming convention in this catalog (e.g. the
@@ -103,6 +104,12 @@ MARKER_FILENAME = ".federated.json"
 # hashing them would make change detection depend on whether someone happened
 # to run the tests before the importer.
 IGNORED_DIR_NAMES = {"__pycache__", ".pytest_cache"}
+# Top-level skill folders federation does not carry. `evals/` is the catalog's
+# to own: the datasets are maintained and run here, so importing upstream's
+# copy would overwrite them and hashing either copy would tie change detection
+# to a folder federation no longer moves. Matched at the skill root only, so a
+# nested `agents/evals/` is still ordinary content.
+UNFEDERATED_DIR_NAMES = {"evals"}
 # The bundle references each published skill as `./skills/<name>` in the
 # marketplace plugin entry's `skills` array.
 SKILLS_PATH_PREFIX = "./skills/"
@@ -356,6 +363,9 @@ def content_hash(root: Path, exclude: Iterable[str] = ()) -> str:
     on a maintainer's machine and before it on a Linux runner, which would
     hash identical files to different digests.
 
+    Files under an unfederated top-level folder are left out on both sides
+    of the comparison, since federation neither reads nor writes them.
+
     `exclude` names relative paths to leave out of the digest.
     """
     skipped = set(exclude)
@@ -369,7 +379,12 @@ def content_hash(root: Path, exclude: Iterable[str] = ()) -> str:
     )
     digest = hashlib.sha256()
     for rel, path in entries:
-        if rel in skipped or IGNORED_DIR_NAMES.intersection(rel.split("/")[:-1]):
+        parts = rel.split("/")
+        if (
+            rel in skipped
+            or IGNORED_DIR_NAMES.intersection(parts[:-1])
+            or (len(parts) > 1 and parts[0] in UNFEDERATED_DIR_NAMES)
+        ):
             continue
         digest.update(rel.encode("utf-8"))
         digest.update(b"\0")
@@ -551,16 +566,35 @@ def is_up_to_date(
 
 
 def copy_skill(src: Path, dest: Path) -> None:
-    """Replace `dest` with an exact copy of the upstream skill folder.
+    """Mirror the upstream skill folder into `dest`.
 
-    The vendored copy is a mirror: anything upstream does not ship is
-    removed, including a local `evals/` dataset. A file that exists only in
-    the catalog cannot be reviewed or maintained by the team that owns the
-    skill, so the source repo is the only place it can come from.
+    Anything upstream does not ship is removed, so a re-import is also how
+    an upstream deletion propagates. The exception is the top-level folders
+    in `UNFEDERATED_DIR_NAMES`: the copy already in the catalog is kept as
+    it is, and upstream's is not imported over it.
     """
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest)
+    if dest.is_dir():
+        for entry in dest.iterdir():
+            if entry.is_dir() and entry.name in UNFEDERATED_DIR_NAMES:
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+    elif dest.exists():
+        dest.unlink()
+
+    src_root = Path(src)
+
+    def ignore(directory: str, names: list[str]) -> set[str]:
+        # `copytree` calls this for every directory it walks; only the skill's
+        # own top level is exempt, so compare against the root it started at.
+        if Path(directory) != src_root:
+            return set()
+        return {name for name in names if name in UNFEDERATED_DIR_NAMES}
+
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dest, ignore=ignore, dirs_exist_ok=True)
 
 
 def write_marker(
