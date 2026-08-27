@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from datasets import SKILLS_DIR  # noqa: E402
+from datasets import skills_dir  # noqa: E402
 
 DEFAULT_MODEL = os.environ.get("EVAL_MODEL", "opus")
 DEFAULT_EFFORT = os.environ.get("EVAL_EFFORT", "high")
@@ -133,7 +133,7 @@ def _stage_workspace(skill: str, seed: Path | None = None) -> Path:
     *contents* land at the workspace root, so a case can hand the agent a
     starting file to edit rather than describing one in prose.
     """
-    skill_src = SKILLS_DIR / skill
+    skill_src = skills_dir() / skill
     if not (skill_src / "SKILL.md").is_file():
         raise FileNotFoundError(f"skill '{skill}' not found at {skill_src / 'SKILL.md'}")
 

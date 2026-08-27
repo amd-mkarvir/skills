@@ -50,7 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import claude_env  # noqa: E402
-from datasets import SKILLS_DIR, Case  # noqa: E402
+from datasets import Case, skills_dir  # noqa: E402
 
 # Tools that carry no routing signal. An agent often opens with a todo list or
 # a plan before deciding anything, and spending the non-skill tool budget on
@@ -118,7 +118,7 @@ def stage_workspace(skills: list[str]) -> Path:
     dest_root = workspace / ".claude" / "skills"
     dest_root.mkdir(parents=True, exist_ok=True)
     for skill in skills:
-        shutil.copytree(SKILLS_DIR / skill, dest_root / skill)
+        shutil.copytree(skills_dir() / skill, dest_root / skill)
     return workspace
 
 

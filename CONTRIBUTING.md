@@ -38,6 +38,15 @@ yours to maintain upstream alongside the skill. See
 must contain and [docs/best-practices.md](docs/best-practices.md) for how to
 make it good.
 
+One rule about evals is worth stating here, because the folder is vendored into
+this catalog and also runs in your own CI: **an eval never fetches the repo it
+ships in.** If your hooks need a fixture, a scorer, or your product installed,
+read `ctx["source_dir"]`, which the runner resolves to the right checkout in
+either repo — the merge commit on your pull requests, the imported commit here.
+A hook that clones instead can only name a branch, so your own pull requests
+would be graded against `main`. See
+[docs/evals.md](docs/evals.md#never-fetch-your-own-repo).
+
 ## 2. Register your source
 
 Edit [`.github/scripts/sources.yml`](.github/scripts/sources.yml) and append an

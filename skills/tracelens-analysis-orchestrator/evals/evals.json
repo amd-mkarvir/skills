@@ -3,7 +3,7 @@
     {
       "id": "gemm-01-repeatability",
       "skill_should_trigger": true,
-      "prompt": "Run the full standalone TraceLens analysis workflow locally with analysis mode default.\n- trace_path: {trace_path}\n- platform: {platform}\n- output_dir: {output_dir}\n- venv_path: {venv_path}\n- tracelens_dir: {tracelens_dir}\n",
+      "prompt": "Run the full standalone TraceLens analysis workflow locally with analysis mode default.\n- trace_path: {trace_path}\n- platform: {platform}\n- output_dir: {output_dir}\n- venv_path: {venv_path}\n- tracelens_dir: {source_dir}\n",
       "files_exist": [
         "analysis_output/analysis.md"
       ]

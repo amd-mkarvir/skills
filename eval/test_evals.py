@@ -16,10 +16,13 @@ quietly drifted from what the runner enforces is worse than no schema at all.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 EVAL_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(EVAL_DIR))
@@ -28,6 +31,7 @@ import agent  # noqa: E402
 import datasets  # noqa: E402
 import routing  # noqa: E402
 import run_evals  # noqa: E402
+import sources  # noqa: E402
 from datasets import EVALUATIONS_KEY, TRIGGER_KEY  # noqa: E402
 
 TRIGGERING = "triggeringEvaluation"
@@ -878,6 +882,152 @@ class TestRoutingCaseSelection(unittest.TestCase):
     def test_an_empty_catalog_keeps_only_negatives(self) -> None:
         kept = datasets.routing_cases(self.cases("published"), [])
         self.assertEqual([c.id for c in kept], ["published-no"])
+
+
+class SkillsTreeTestCase(unittest.TestCase):
+    """A throwaway skills/ tree, so tests never depend on the real catalog."""
+
+    def setUp(self) -> None:
+        self.previous = datasets.skills_dir()
+        self.addCleanup(datasets.set_skills_dir, self.previous)
+        # Resolution reads the environment, so isolate it: a developer with
+        # SKILL_SOURCE_DIR exported should not change what these tests mean.
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop(sources.SOURCE_DIR_ENV, None)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name).resolve()
+        # A bare .git is enough: resolution only asks whether one is there.
+        (self.root / ".git").mkdir()
+        self.tree = self.root / "skills"
+        self.cache = self.root / "cache"
+        self.cache.mkdir()
+
+    def add_skill(self, name: str, marker: dict | None = None) -> Path:
+        skill = self.tree / name
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(f"---\nname: {name}\n---\n", encoding="utf-8")
+        if marker is not None:
+            (skill / sources.MARKER_FILENAME).write_text(json.dumps(marker), encoding="utf-8")
+        datasets.set_skills_dir(self.tree)
+        return skill
+
+
+class TestSkillsDirRelocation(SkillsTreeTestCase):
+    """A product repo grades the skill tree it changed, not the vendored copy."""
+
+    def test_discovery_follows_the_relocated_tree(self) -> None:
+        self.add_skill("analysis-orchestrator")
+        self.assertEqual(datasets.catalog_skills(), ["analysis-orchestrator"])
+
+    def test_lookups_follow_the_relocated_tree(self) -> None:
+        self.add_skill("analysis-orchestrator")
+        self.assertEqual(
+            datasets.dataset_path("analysis-orchestrator"),
+            self.tree / "analysis-orchestrator" / datasets.DATASET_RELPATH,
+        )
+
+    def test_a_missing_directory_is_rejected_up_front(self) -> None:
+        with self.assertRaises(SystemExit):
+            datasets.set_skills_dir(self.root / "nope")
+
+
+class TestSourceResolution(SkillsTreeTestCase):
+    """Which checkout a skill's hooks are graded against, and why."""
+
+    def resolve(self, skill: str) -> tuple[sources.Source, mock.Mock]:
+        """Resolve `skill` without ever reaching the network."""
+        with mock.patch.object(sources, "fetch_commit") as fetch:
+            return sources.resolve(skill, self.cache), fetch
+
+    def test_the_environment_override_wins(self) -> None:
+        self.add_skill("federated", marker={"repo": "AMD-AGI/TraceLens", "commit": "a" * 40})
+        elsewhere = self.root / "my-clone"
+        elsewhere.mkdir()
+        os.environ[sources.SOURCE_DIR_ENV] = str(elsewhere)
+        source, fetch = self.resolve("federated")
+        self.assertEqual(source.path, elsewhere.resolve())
+        # Even for a federated skill: the override exists to skip the fetch.
+        fetch.assert_not_called()
+
+    def test_the_override_must_exist(self) -> None:
+        self.add_skill("local")
+        os.environ[sources.SOURCE_DIR_ENV] = str(self.root / "nope")
+        with self.assertRaises(SystemExit):
+            sources.resolve("local", self.cache)
+
+    def test_a_federated_skill_is_pinned_to_its_imported_commit(self) -> None:
+        commit = "b711b00d65cd0339394afc22e6482ef4776ec25f"
+        self.add_skill("federated", marker={"repo": "AMD-AGI/TraceLens", "commit": commit})
+        source, fetch = self.resolve("federated")
+        fetch.assert_called_once_with("AMD-AGI/TraceLens", commit, self.cache / "source")
+        self.assertEqual(source.path, (self.cache / "source").resolve())
+        self.assertIn(commit[:12], source.origin)
+
+    def test_a_marker_without_a_commit_is_an_error(self) -> None:
+        # Better to stop than to silently grade the enclosing catalog, which is
+        # not the repo this skill's fixtures live in.
+        self.add_skill("federated", marker={"repo": "AMD-AGI/TraceLens"})
+        with self.assertRaises(SystemExit):
+            sources.resolve("federated", self.cache)
+
+    def test_a_locally_authored_skill_uses_its_enclosing_checkout(self) -> None:
+        self.add_skill("local")
+        source, fetch = self.resolve("local")
+        # On a pull request this is the merge commit, which is the point: the
+        # product repo needs no configuration to grade the change under test.
+        self.assertEqual(source.path, self.root)
+        fetch.assert_not_called()
+
+
+class TestSetupSessionArity(unittest.TestCase):
+    """Hooks ship from the owning repo, so runner and hook versions can skew."""
+
+    def call(self, func) -> tuple:
+        hooks = types.SimpleNamespace(setup_session=func)
+        return run_evals._call_setup_session(hooks, Path("cache"), {"source_dir": "src"})
+
+    def test_a_hook_taking_ctx_receives_it(self) -> None:
+        result = self.call(lambda cache_dir, ctx: {"seen": ctx["source_dir"]})
+        self.assertEqual(result, {"seen": "src"})
+
+    def test_an_older_one_argument_hook_still_runs(self) -> None:
+        result = self.call(lambda cache_dir: {"seen": str(cache_dir)})
+        self.assertEqual(result, {"seen": "cache"})
+
+    def test_returning_nothing_is_allowed(self) -> None:
+        self.assertEqual(self.call(lambda cache_dir, ctx: None), {})
+
+
+class TestHooksDoNotFetchTheirOwnRepo(unittest.TestCase):
+    """The rule this contract exists to enforce, checked mechanically.
+
+    A hook that clones can only name a branch, so the eval stops grading the
+    commit under review. Every hook that needs its own repo takes
+    ``ctx["source_dir"]`` instead.
+    """
+
+    # Prose about cloning is fine; invoking it is not. These are the forms a
+    # `git clone` reaches the shell in, so the check reads code, not comments.
+    FETCH_TOKENS = ("git clone", '"clone"', "'clone'")
+
+    def test_no_hook_clones(self) -> None:
+        for skill in datasets.catalog_skills():
+            path = datasets.hooks_path(skill)
+            if not path.is_file():
+                continue
+            body = path.read_text(encoding="utf-8")
+            found = [token for token in self.FETCH_TOKENS if token in body]
+            with self.subTest(skill=skill):
+                if found:
+                    self.fail(
+                        f"{datasets.hooks_path(skill).name} for {skill} invokes "
+                        f"{found[0]}. A hook must not fetch its own repo: it can "
+                        "only name a branch, so the eval stops grading the commit "
+                        "under review. Use ctx['source_dir'] instead."
+                    )
 
 
 if __name__ == "__main__":

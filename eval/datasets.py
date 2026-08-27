@@ -66,13 +66,36 @@ one exception and imports PyYAML lazily; nothing on the run path calls it.
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
 EVAL_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EVAL_DIR.parent
-SKILLS_DIR = REPO_ROOT / "skills"
+
+# Which tree of skill folders to read. Normally this repo's own, but a product
+# repo that vendors this harness points it at its own `skills/` directory so a
+# pull request is graded against the skill text it changed rather than the copy
+# last federated into the catalog. `--skills-dir` on the runner overrides it.
+SKILLS_DIR_ENV = "SKILLS_DIR"
+_SKILLS_DIR = Path(os.environ.get(SKILLS_DIR_ENV, "").strip() or REPO_ROOT / "skills")
+
+
+def skills_dir() -> Path:
+    """The tree of skill folders every lookup in this module resolves against."""
+    return _SKILLS_DIR
+
+
+def set_skills_dir(path: Path | str) -> Path:
+    """Point every lookup at `path`. Raises SystemExit if it is not a directory."""
+    global _SKILLS_DIR  # noqa: PLW0603 -- process-wide setting, set once from the CLI
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_dir():
+        raise SystemExit(f"error: --skills-dir {path} is not a directory.")
+    _SKILLS_DIR = resolved
+    return resolved
+
 
 # The published bundle. Routing installs what this lists, because that is the
 # set of skills a user has competing for a prompt.
@@ -214,19 +237,19 @@ class Case:
 
 
 def dataset_path(skill: str) -> Path:
-    return SKILLS_DIR / skill / DATASET_RELPATH
+    return skills_dir() / skill / DATASET_RELPATH
 
 
 def extended_dataset_path(skill: str) -> Path:
-    return SKILLS_DIR / skill / EXTENDED_DATASET_RELPATH
+    return skills_dir() / skill / EXTENDED_DATASET_RELPATH
 
 
 def hooks_path(skill: str) -> Path:
-    return SKILLS_DIR / skill / HOOKS_RELPATH
+    return skills_dir() / skill / HOOKS_RELPATH
 
 
 def machine_path(skill: str) -> Path:
-    return SKILLS_DIR / skill / MACHINE_RELPATH
+    return skills_dir() / skill / MACHINE_RELPATH
 
 
 def catalog_skills() -> list[str]:
@@ -235,11 +258,11 @@ def catalog_skills() -> list[str]:
     This is the set that must be tested and validated, not the set that gets
     installed side by side: see ``routing_catalog`` for that.
     """
-    if not SKILLS_DIR.is_dir():
+    if not skills_dir().is_dir():
         return []
     return sorted(
         path.name
-        for path in SKILLS_DIR.iterdir()
+        for path in skills_dir().iterdir()
         if path.is_dir() and (path / "SKILL.md").is_file()
     )
 
@@ -534,7 +557,7 @@ def validate_all() -> list[str]:
         # Only reachable for a triggering evaluation, which is the only kind
         # that owns a skill and the only kind allowed to stage anything.
         if case.workspace and case.skill:
-            if not (SKILLS_DIR / case.skill / case.workspace).is_dir():
+            if not (skills_dir() / case.skill / case.workspace).is_dir():
                 errors.append(
                     f"case `{case.id}`: `workspace` points at "
                     f"`{case.skill}/{case.workspace}`, which is not a directory."

@@ -5,47 +5,45 @@
 """TraceLens setup and scoring for the `gemm-01-repeatability` behavior case.
 
 Prompts and expectations live in ``evals.json``; this file holds only what the
-dataset format cannot express -- an external checkout, a virtualenv, and a
-scoring script that lives in someone else's repo.
+dataset format cannot express -- a virtualenv and a scoring script that lives
+in the repo this skill is authored in.
+
+Which TraceLens tree to grade against is deliberately not decided here. The
+runner resolves it and passes it in as ``ctx["source_dir"]``: the pull
+request's own checkout when TraceLens runs these evals, the commit recorded in
+``.federated.json`` when the catalog runs them. A hook that cloned TraceLens
+itself could only name a branch, so it would grade whatever ``main`` held --
+never the change under review. Set ``SKILL_SOURCE_DIR`` to point the run at a
+different checkout.
 
 The case mirrors what ``run_repeatability_parallel.sh`` schedules first: the
-Phase-1 agent workflow on ``gemm_01_compute_few_tiles`` from
+Phase-1 agent workflow on the first standalone case in
 ``combined_traces_standalone.csv``, then the first Phase-2 eval,
 ``workflow_scripted_evals.py``, over whatever the agent produced.
 
 The runner calls, in order:
 
-  * ``setup_session(cache_dir)`` -- once per run. Clones and installs TraceLens
-    outside any agent workspace, and returns the paths the prompt interpolates.
+  * ``setup_session(cache_dir, ctx)`` -- once per run. Installs TraceLens from
+    ``ctx["source_dir"]`` into a virtualenv outside any agent workspace, and
+    returns the paths the prompt interpolates.
   * ``setup(workspace, case, ctx)`` -- per case. Creates the output directory
     inside the agent's workspace and hands back its absolute path.
   * ``check(run, case, ctx)``     -- per case, after grading. Runs TraceLens's
     own scorer; anything it flags fails the case.
-
-Environment overrides: ``TRACELENS_REPO_URL`` and ``TRACELENS_REF``.
 """
 
 from __future__ import annotations
 
 import csv
-import os
 import subprocess
 import sys
 import tarfile
 from pathlib import Path
 
-TRACELENS_REPO_URL = os.environ.get(
-    "TRACELENS_REPO_URL", "https://github.com/AMD-AGI/TraceLens.git"
-)
-TRACELENS_REF = os.environ.get("TRACELENS_REF", "").strip()
 UNIT_TESTS_ARCHIVE = "unit_tests_standalone.tar.gz"
 ANALYSIS_TESTS = "agent_evals/Analysis/analysis_tests"
 COMBINED_TRACES_CSV = f"{ANALYSIS_TESTS}/combined_traces_standalone.csv"
-
-# The default repeatability order starts here. Asserted rather than assumed, so
-# an upstream reordering surfaces as a clear failure instead of silently
-# scoring a different case than the one this file documents.
-EXPECTED_CASE_ID = "gemm_01_compute_few_tiles"
+WORKFLOW_EVALS = "agent_evals/Analysis/eval_utils/workflow_scripted_evals.py"
 
 # An analysis.md this short is a stub, not a report.
 MIN_ANALYSIS_BYTES = 100
@@ -67,17 +65,6 @@ def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
         )
 
 
-def _clone_tracelens(cache_dir: Path) -> Path:
-    dest = cache_dir / "TraceLens"
-    if dest.exists():
-        return dest
-    cmd = ["git", "clone", "--depth", "1"]
-    if TRACELENS_REF:
-        cmd += ["--branch", TRACELENS_REF]
-    _run([*cmd, TRACELENS_REPO_URL, str(dest)])
-    return dest
-
-
 def _extract_unit_tests(tracelens_dir: Path) -> None:
     archive = tracelens_dir / ANALYSIS_TESTS / UNIT_TESTS_ARCHIVE
     if not archive.is_file():
@@ -86,6 +73,7 @@ def _extract_unit_tests(tracelens_dir: Path) -> None:
         return
     # Archive members are rooted at agent_evals/Analysis/analysis_tests/...
     # under the repo, so extract at tracelens_dir rather than at that subtree.
+    # In place, because the Phase-2 scorer resolves fixtures relative to it.
     with tarfile.open(archive, "r:gz") as tar:
         tar.extractall(path=tracelens_dir)
 
@@ -102,19 +90,25 @@ def _install_tracelens_venv(cache_dir: Path, tracelens_dir: Path) -> Path:
     return venv_dir
 
 
-def setup_session(cache_dir: Path) -> dict:
-    """Clone and install TraceLens once, outside any agent workspace."""
-    print("  [setup] cloning and installing TraceLens (slow, once per run)", flush=True)
-    tracelens_dir = _clone_tracelens(cache_dir).resolve()
+def setup_session(cache_dir: Path, ctx: dict) -> dict:
+    """Install TraceLens from the runner-supplied checkout, once per run."""
+    tracelens_dir = Path(ctx["source_dir"]).resolve()
+    if not (tracelens_dir / ANALYSIS_TESTS).is_dir():
+        raise RuntimeError(
+            f"{tracelens_dir} does not look like a TraceLens checkout: expected "
+            f"{ANALYSIS_TESTS}/ beneath it. The runner resolves this from "
+            "SKILL_SOURCE_DIR, then .federated.json, then the enclosing git repo."
+        )
+
+    print(f"  [setup] installing TraceLens from {tracelens_dir} (slow, once per run)", flush=True)
     _extract_unit_tests(tracelens_dir)
 
     with (tracelens_dir / COMBINED_TRACES_CSV).open(newline="", encoding="utf-8") as handle:
         row = next(csv.DictReader(handle))
-    if row["id"] != EXPECTED_CASE_ID:
-        raise RuntimeError(
-            f"expected the first standalone repeatability case to be "
-            f"{EXPECTED_CASE_ID}, found {row['id']}; upstream reordered the CSV."
-        )
+    # Whichever case upstream schedules first is the one graded; logged rather
+    # than asserted, because the tree is pinned to a commit and a pull request
+    # is allowed to reorder its own fixtures.
+    print(f"  [setup] grading the first standalone repeatability case: {row['id']}", flush=True)
 
     trace_path = (tracelens_dir / row["trace_path"]).resolve()
     if not trace_path.is_file():
@@ -122,7 +116,6 @@ def setup_session(cache_dir: Path) -> dict:
 
     venv_dir = _install_tracelens_venv(cache_dir, tracelens_dir).resolve()
     return {
-        "tracelens_dir": tracelens_dir,
         "venv_path": venv_dir,
         "trace_path": trace_path,
         "platform": row["platform"],
@@ -139,7 +132,7 @@ def setup(workspace: Path, case, ctx: dict) -> dict:
 def check(run, case, ctx: dict) -> None:
     """Score the agent's report with TraceLens's own Phase-2 eval."""
     output_dir = Path(ctx["output_dir"])
-    tracelens_dir = Path(ctx["tracelens_dir"])
+    tracelens_dir = Path(ctx["source_dir"])
     venv_python = Path(ctx["venv_path"]) / "bin" / "python"
 
     analysis_md = output_dir / "analysis.md"
@@ -152,7 +145,7 @@ def check(run, case, ctx: dict) -> None:
     _run(
         [
             str(venv_python),
-            str(tracelens_dir / "agent_evals/Analysis/eval_utils/workflow_scripted_evals.py"),
+            str(tracelens_dir / WORKFLOW_EVALS),
             "--output-dir", str(output_dir),
             "--results", str(results_csv),
             "--comparison-scope", "standalone",

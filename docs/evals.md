@@ -94,16 +94,49 @@ os: [Linux]              # defaults to every platform that runner type has
 
 Name the kind of machine and the rest follows: `runner_type: instinct` implies the runner labels, the Linux-only constraint, the `enable_mi_ci` pull-request label that rations that scarce pool, and the scoped credentials. Most skills that need this file need only `os: [Linux]`, to drop a Windows leg that would just exercise the failure path of Linux-only tooling.
 
-**`evals/hooks.py`** — setup a dataset cannot express: cloning a repo, tearing down a container, running an external scoring script. Every function is optional:
+**`evals/hooks.py`** — setup a dataset cannot express: staging a fixture, tearing down a container, running an external scoring script. Every function is optional:
 
 ```python
-def setup_session(cache_dir): ...     # once per run; returns {name: value} for {placeholders} in prompts
-def setup(workspace, case, ctx): ...  # before each case; may return more placeholders
+def setup_session(cache_dir, ctx): ...  # once per run; returns {name: value} for {placeholders} in prompts
+def setup(workspace, case, ctx): ...    # before each case; may return more placeholders
 def teardown(workspace, case, ctx): ...
-def check(run, case, ctx): ...        # after each case; raise AssertionError to fail it
+def check(run, case, ctx): ...          # after each case; raise AssertionError to fail it
 ```
 
 Keep prompts and expectations in the dataset even when you use hooks, so what is being asserted stays readable without opening Python. See [`skills/serving-llms-on-instinct/evals/hooks.py`](../skills/serving-llms-on-instinct/evals/hooks.py) for a simple example and [`skills/tracelens-analysis-orchestrator/evals/hooks.py`](../skills/tracelens-analysis-orchestrator/evals/hooks.py) for an involved one.
+
+#### Never fetch your own repo
+
+Hooks that need a fixture, a scorer, or the product installed get all three from `ctx["source_dir"]`, a checkout of the repo that owns the skill. The runner resolves it; your hook only reads it.
+
+Do not clone it yourself. A clone can only name a branch, so the moment your repo runs these evals on a pull request, the eval grades `main` instead of the change under review — and a pull request that breaks a fixture, a scorer, or the skill text passes its own eval. Resolving centrally lets each repo answer with the tree it actually has:
+
+| Where the run happens | What `source_dir` is |
+| --- | --- |
+| Your repo, on a pull request | That checkout, so the merge commit under test |
+| This catalog | The commit in `.federated.json`, the one the skill was vendored from |
+| Anywhere, with `SKILL_SOURCE_DIR` set | Whatever it points at — the escape hatch for a local clone |
+
+The full order is in [`eval/sources.py`](../eval/sources.py). One consequence worth knowing: because the catalog fetches a pinned commit rather than a branch, your fixtures never move underneath a catalog run, so a hook needs no defensive assertions about upstream ordering.
+
+### Running these evals from your own repo
+
+The two trees a run reads are both relocatable, so a product repo can grade its own pull requests with the same harness the catalog uses. Point `--skills-dir` at your skill folders; `source_dir` then resolves to your checkout on its own, because that is the git repository your skills live in.
+
+```yaml
+- uses: actions/checkout@v4              # your repo, at the PR merge commit
+- uses: actions/checkout@v4              # the harness
+  with:
+    repository: amd/skills
+    path: .skills-harness
+- run: |
+    python .skills-harness/eval/run_evals.py \
+      --mode behavior \
+      --skill analysis-orchestrator \
+      --skills-dir "$GITHUB_WORKSPACE/TraceLens/Agent/Analysis/skills"
+```
+
+`--skills-dir` matters as much as the source tree: without it the harness reads its own `skills/`, and a pull request editing `SKILL.md` would be graded against whatever the catalog last imported. `SKILLS_DIR` and `SKILL_SOURCE_DIR` are the environment equivalents, for when the product tree is not the repo holding the skill.
 
 ### Running tests locally
 
@@ -112,6 +145,7 @@ python eval/run_evals.py --validate              # structure only: no agent, no 
 python eval/run_evals.py --skill <your-skill>    # routing and behavior for your skill
 python eval/run_evals.py --mode routing          # the published bundle
 python eval/run_evals.py --only <case-id> --keep-logs logs   # one case, keeping the transcript
+SKILL_SOURCE_DIR=~/src/TraceLens python eval/run_evals.py --skill tracelens-analysis-orchestrator
 ```
 
 Everything but `--validate` needs the `claude` CLI authenticated, plus whatever your own cases need. No `pip install`: the runner is standard library only.

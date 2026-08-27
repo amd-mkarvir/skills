@@ -20,6 +20,11 @@ format and under no coverage requirement of its own. Both modes include it by
 default; ``--no-extended`` grades the required dataset alone, which is what a
 repo that only owes the required tier passes.
 
+Both trees a run reads are relocatable, so a product repo can vendor this
+harness and grade its own pull requests: ``--skills-dir`` (or ``SKILLS_DIR``)
+says where the skill folders are, and ``sources.resolve`` decides which
+checkout of the owning repo a skill's hooks are handed. See ``sources.py``.
+
 The prompt is written once and both modes read it, which is the whole point:
 the old split had a central routing prompt set and a separate per-skill pytest
 file that re-asserted routing with a substring match on the transcript.
@@ -39,6 +44,10 @@ Usage::
     # one case, keeping the raw transcript
     python eval/run_evals.py --only qwen-on-mi300x --keep-logs eval-logs
 
+    # from the product repo that owns the skill, grading its own checkout
+    python eval/run_evals.py --mode behavior --skill analysis-orchestrator \
+        --skills-dir TraceLens/Agent/Analysis/skills
+
 Reports go to stdout as markdown, to ``$GITHUB_STEP_SUMMARY`` under Actions,
 and to a JSON artifact under ``eval/runs/``.
 """
@@ -47,6 +56,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import inspect
 import json
 import os
 import shutil
@@ -64,6 +74,7 @@ sys.path.insert(0, str(EVAL_DIR))
 
 import datasets  # noqa: E402
 import routing  # noqa: E402
+import sources  # noqa: E402
 from agent import (  # noqa: E402
     Check,
     check_api_reachable,
@@ -101,10 +112,13 @@ def _load_hooks(skill: str) -> ModuleType | None:
 
     Recognized (all optional)::
 
-        setup_session(cache_dir)      -> dict of template vars, once per skill
+        setup_session(cache_dir, ctx) -> dict of template vars, once per skill
         setup(workspace, case, ctx)   -> dict of extra template vars, per case
         teardown(workspace, case, ctx)
         check(run, case, ctx)         -> raise AssertionError to fail the case
+
+    ``ctx`` arrives carrying ``source_dir``, the checkout of the repo that owns
+    the skill, so a hook never fetches its own source. See ``sources.py``.
     """
     path = datasets.hooks_path(skill)
     if not path.is_file():
@@ -115,6 +129,28 @@ def _load_hooks(skill: str) -> ModuleType | None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _call_setup_session(hooks: ModuleType, cache_dir: Path, ctx: dict) -> dict:
+    """Call ``setup_session``, tolerating the pre-``source_dir`` one-arg form.
+
+    Hooks travel with the skill from the repo that owns it, so a hook file and
+    this runner are versioned separately and can arrive in either order. An
+    older hook that only takes ``cache_dir`` still runs; it simply resolves its
+    own source, which is the behavior this argument exists to replace.
+    """
+    func = hooks.setup_session
+    try:
+        params = inspect.signature(func).parameters.values()
+    except (TypeError, ValueError):  # builtins and other unintrospectable callables
+        return func(cache_dir, ctx) or {}
+    positional = [
+        p
+        for p in params
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.VAR_POSITIONAL)
+    ]
+    takes_ctx = any(p.kind is p.VAR_POSITIONAL for p in positional) or len(positional) >= 2
+    return (func(cache_dir, ctx) if takes_ctx else func(cache_dir)) or {}
 
 
 def _expand(text: str, ctx: dict) -> str:
@@ -139,7 +175,7 @@ def run_behavior_case(
 ) -> BehaviorOutcome:
     """Stage one skill, run the prompt to completion, grade what happened."""
     assert case.skill is not None
-    seed = (datasets.SKILLS_DIR / case.skill / case.workspace) if case.workspace else None
+    seed = (datasets.skills_dir() / case.skill / case.workspace) if case.workspace else None
     started = time.perf_counter()
     case_ctx = dict(ctx)
     checks: list[Check] = []
@@ -193,9 +229,18 @@ def run_behavior_case(
     )
 
 
-def run_behavior(skills: list[str], cases: list[Case], model: str, effort: str) -> list[BehaviorOutcome]:
-    """Run every behavior case, grouped by skill so session setup happens once."""
+def run_behavior(
+    skills: list[str], cases: list[Case], model: str, effort: str
+) -> tuple[list[BehaviorOutcome], dict[str, str]]:
+    """Run every behavior case, grouped by skill so session setup happens once.
+
+    Also returns, per skill that used hooks, where its source tree came from.
+    A federated skill's results are only meaningful alongside the tree they
+    were graded against, so that provenance goes in the report rather than
+    scrolling past in the log.
+    """
     outcomes: list[BehaviorOutcome] = []
+    origins: dict[str, str] = {}
     for skill in skills:
         skill_cases = [c for c in cases if c.skill == skill and c.has_behavior]
         if not skill_cases:
@@ -204,21 +249,38 @@ def run_behavior(skills: list[str], cases: list[Case], model: str, effort: str) 
         hooks = _load_hooks(skill)
         ctx: dict = {}
         cache_dir: Path | None = None
-        if hooks is not None and hasattr(hooks, "setup_session"):
-            cache_dir = Path(tempfile.mkdtemp(prefix=f"evalcache-{skill}-"))
-            print(f"[behavior] {skill}: running evals/hooks.py setup_session()", flush=True)
-            ctx.update(hooks.setup_session(cache_dir) or {})
         try:
+            # Only hooks consume a source tree, and resolving one can mean a
+            # fetch, so a skill without hooks pays nothing for this.
+            if hooks is not None:
+                cache_dir = Path(tempfile.mkdtemp(prefix=f"evalcache-{skill}-"))
+                source = sources.resolve(skill, cache_dir)
+                ctx["source_dir"] = source.path
+                origins[skill] = source.origin
+                print(
+                    f"[behavior] {skill}: source tree from {source.origin} "
+                    f"-> {source.path}",
+                    flush=True,
+                )
+                if hasattr(hooks, "setup_session"):
+                    print(
+                        f"[behavior] {skill}: running evals/hooks.py setup_session()",
+                        flush=True,
+                    )
+                    ctx.update(_call_setup_session(hooks, cache_dir, ctx))
+
             print(f"[behavior] {skill}: {len(skill_cases)} case(s)", flush=True)
             for case in skill_cases:
                 outcomes.append(run_behavior_case(case, ctx, hooks, model, effort))
         finally:
             if cache_dir is not None:
                 shutil.rmtree(cache_dir, ignore_errors=True)
-    return outcomes
+    return outcomes, origins
 
 
-def summarize_behavior(outcomes: list[BehaviorOutcome], meta: dict) -> dict:
+def summarize_behavior(
+    outcomes: list[BehaviorOutcome], meta: dict, origins: dict[str, str] | None = None
+) -> dict:
     per_skill: dict[str, dict] = {}
     for skill in sorted({o.skill for o in outcomes}):
         subset = [o for o in outcomes if o.skill == skill]
@@ -227,6 +289,7 @@ def summarize_behavior(outcomes: list[BehaviorOutcome], meta: dict) -> dict:
             "passed": sum(1 for o in subset if o.passed),
             "checks": sum(len(o.checks) for o in subset),
             "checks_passed": sum(1 for o in subset for c in o.checks if c["passed"]),
+            "source": (origins or {}).get(skill, ""),
         }
     return {
         "meta": meta,
@@ -252,13 +315,20 @@ def render_behavior_markdown(summary: dict) -> str:
         f"({totals['checks_passed']}/{totals['checks']} individual expectations) "
         f"on `{meta['model']}` (effort `{meta['effort']}`).",
         "",
-        "| Skill | Cases | Passed | Expectations | Met |",
-        "| --- | --- | --- | --- | --- |",
+    ]
+    # The source column is only meaningful for skills whose hooks were handed a
+    # checkout, so it appears only when at least one was.
+    sourced = any(stats.get("source") for stats in summary["per_skill"].values())
+    source_header = " Source |" if sourced else ""
+    lines += [
+        f"| Skill | Cases | Passed | Expectations | Met |{source_header}",
+        f"| --- | --- | --- | --- | --- |{' --- |' if sourced else ''}",
     ]
     for skill, stats in summary["per_skill"].items():
+        source_cell = f" {stats.get('source') or '--'} |" if sourced else ""
         lines.append(
             f"| `{skill}` | {stats['cases']} | {stats['passed']} | "
-            f"{stats['checks']} | {stats['checks_passed']} |"
+            f"{stats['checks']} | {stats['checks_passed']} |{source_cell}"
         )
 
     failures = [c for c in summary["cases"] if not c["passed"]]
@@ -343,6 +413,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--only", default="", help="Comma-separated case ids to run.")
     parser.add_argument(
+        "--skills-dir",
+        default="",
+        help=(
+            "Directory holding the skill folders. Defaults to $SKILLS_DIR, then "
+            "this repo's skills/. A product repo vendoring this harness points "
+            "it at its own tree so a pull request grades the skill it changed."
+        ),
+    )
+    parser.add_argument(
         "--extended",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -410,6 +489,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # Before anything reads a skill folder, including --list-skills.
+    if args.skills_dir:
+        datasets.set_skills_dir(args.skills_dir)
 
     if args.list_skills:
         print(json.dumps(datasets.skills_with_datasets(), separators=(",", ":")))
@@ -562,17 +645,19 @@ def main(argv: list[str] | None = None) -> int:
                 "`files_exist` to a triggering evaluation."
             )
         else:
-            outcomes = run_behavior(skills, gradable, args.model, args.effort)
+            outcomes, origins = run_behavior(skills, gradable, args.model, args.effort)
             summary = summarize_behavior(
                 outcomes,
                 {
                     "model": args.model,
                     "effort": args.effort,
                     "skills": skills,
+                    "skills_dir": str(datasets.skills_dir()),
                     "extended": args.extended,
                     "wall_time_s": round(time.time() - started, 1),
                     "github_run_id": os.environ.get("GITHUB_RUN_ID"),
                 },
+                origins,
             )
             _write_report(summary, render_behavior_markdown(summary), args, "behavior")
             if summary["totals"]["passed"] != summary["totals"]["cases"]:
