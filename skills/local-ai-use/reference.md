@@ -236,8 +236,9 @@ say) while the agent runs on the laptop. To point this skill at it:
    with the new endpoint baked in.
 4. Make sure the remote server is bound to a non-loopback interface
    (`lemonade config set host 0.0.0.0`) and that firewall rules allow
-   inbound 13305. Setting `host` to `0.0.0.0` exposes the server; pair it
-   with `LEMONADE_API_KEY` so it isn't open to the LAN.
+   inbound connections on the port it listens on. Setting `host` to
+   `0.0.0.0` exposes the server; pair it with `LEMONADE_API_KEY` so it
+   isn't open to the LAN.
 
 A server `scan` cannot see is not necessarily down: beacons are UDP, only go
 out on RFC1918 networks, and can be disabled (`--no-broadcast`). Ask the user
