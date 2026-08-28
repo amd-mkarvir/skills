@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Validate every SKILL.md and eval dataset, and that generated plugin
-# manifests are up to date. Runs no agent and spends no tokens.
+# Validate the federation file, every SKILL.md and eval dataset, and that
+# generated plugin manifests are up to date. Runs no agent, clones nothing,
+# and spends no tokens.
 #
 # Usage:
 #   ./.github/scripts/check.sh              Validate every skill, dataset, and manifest.
@@ -19,6 +20,7 @@ usage() {
 
 case "${1:-}" in
   "")
+    uv run .github/scripts/federate_skills.py --check-catalog
     uv run .github/scripts/validate_skills.py
     python eval/run_evals.py --validate
     uv run .github/scripts/generate_cursor_marketplace.py --check

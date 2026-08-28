@@ -1,0 +1,145 @@
+name: federate-skills
+
+# Keeps the vendored copies under `skills/` in step with the source repos
+# declared in `.github/federation.json`. Runs nightly and on demand.
+#
+# `federate_skills.py` clones each declared repo at `main` and re-vendors a
+# skill only when the contents of its upstream folder changed, so a night
+# with no upstream activity produces no diff and no pull request. When
+# something did change, the run regenerates the agent manifests and opens a
+# pull request titled "Bump `<skill>` to `<commit>`". Validating the result is
+# the `validate` workflow's job on that pull request, not this workflow's.
+#
+# Dispatch it from the branch the update should be merged into (normally
+# `main`), never from `bot/federate-skills`, which is where it pushes.
+#
+# See the "Catalog federation" section of `README.md` for the design and
+# `CONTRIBUTING.md` for the federation file's schema.
+
+on:
+  schedule:
+    # 06:17 UTC nightly. Off the hour so the run isn't queued behind the
+    # crowd of jobs scheduled at :00.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Limit the run to one local skill name (e.g. tracelens-analysis-orchestrator)."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: federate-skills
+  cancel-in-progress: false
+
+env:
+  PR_BRANCH: bot/federate-skills
+
+jobs:
+  federate:
+    name: Federate skills
+    runs-on: ubuntu-latest
+    steps:
+      # A pull request cannot target its own head branch, and the failure the
+      # action reports for that ("base and branch must be different") gives no
+      # hint about what to do instead. Catch it up front, before spending a
+      # clone on a run that cannot finish.
+      - name: Check the workflow was dispatched from a mergeable branch
+        run: |
+          if [ "$GITHUB_REF_NAME" = "$PR_BRANCH" ]; then
+            echo "::error title=Dispatched from the wrong branch::federate-skills was run on '$PR_BRANCH', which is the branch it pushes its own pull requests to, so the pull request would target itself. Re-run the workflow from the branch the update should be merged into (normally main)."
+            exit 1
+          fi
+          echo "Federating into '$GITHUB_REF_NAME' via pull request branch '$PR_BRANCH'."
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Vendor skills declared in .github/federation.json
+        id: federate
+        env:
+          # Written outside the work tree so the summary never shows up as a
+          # repository change.
+          SUMMARY: ${{ runner.temp }}/federation-summary.json
+          ONLY: ${{ inputs.only }}
+        run: |
+          args=(--summary-json "$SUMMARY")
+          if [ -n "$ONLY" ]; then args+=(--only "$ONLY"); fi
+          uv run .github/scripts/federate_skills.py "${args[@]}"
+
+          {
+            echo "title=$(jq -r '.title' "$SUMMARY")"
+            echo "body<<FEDERATION_BODY_EOF"
+            jq -r '.body' "$SUMMARY"
+            echo "FEDERATION_BODY_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Regenerate derived plugin manifests (Cursor + Codex)
+        run: ./.github/scripts/publish.sh
+
+      # Unchanged skills are left byte-for-byte alone (a marker-only
+      # difference is reverted by the importer), so an empty work tree here is
+      # the authoritative "nothing to federate" signal. Nothing to federate is
+      # a successful outcome, not a failure.
+      - name: Detect changes
+        id: changes
+        run: |
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git status --short
+          fi
+
+      # Push to a dedicated branch and open a PR rather than committing to
+      # main, so vendored changes stay reviewable and the standard `validate`
+      # workflow gates them. Re-running updates the same PR in place.
+      - name: Open pull request
+        id: pr
+        if: ${{ steps.changes.outputs.changed == 'true' }}
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: ${{ env.PR_BRANCH }}
+          delete-branch: true
+          commit-message: ${{ steps.federate.outputs.title || 'Refresh federated skills' }}
+          title: ${{ steps.federate.outputs.title || 'Refresh federated skills' }}
+          body: |
+            ${{ steps.federate.outputs.body }}
+
+            Opened by the `federate-skills` workflow ([run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})).
+          labels: |
+            catalog
+            automated
+          add-paths: |
+            skills/**
+            .claude-plugin/**
+            .cursor-plugin/**
+            .codex-plugin/**
+            .agents/plugins/**
+
+      # Say plainly what happened, in the log and on the run's summary page.
+      # "Nothing changed upstream" is the expected result most nights and has
+      # to read as a success rather than as a job that quietly did nothing.
+      - name: Report outcome
+        env:
+          CHANGED: ${{ steps.changes.outputs.changed }}
+          TITLE: ${{ steps.federate.outputs.title }}
+          PR_URL: ${{ steps.pr.outputs.pull-request-url }}
+          PR_OPERATION: ${{ steps.pr.outputs.pull-request-operation }}
+        run: |
+          if [ "$CHANGED" != "true" ]; then
+            message="Every federated skill already matches its source repo at main. No pull request needed."
+          elif [ -n "$PR_URL" ]; then
+            message="Pull request ${PR_OPERATION:-ready}: ${TITLE:-Refresh federated skills} ($PR_URL)"
+          else
+            message="Changes were detected but no pull request was opened, because none of them fall under the paths this workflow commits."
+          fi
+          echo "$message"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"
