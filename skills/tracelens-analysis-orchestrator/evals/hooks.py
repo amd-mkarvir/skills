@@ -2,45 +2,68 @@
 #
 # See LICENSE for license information.
 
-"""TraceLens setup and scoring for the `gemm-01-repeatability` behavior case.
+"""TraceLens fixtures and scoring for the `gemm-01-repeatability` behavior case.
 
 Prompts and expectations live in ``evals.json``; this file holds only what the
-dataset format cannot express -- an external checkout, a virtualenv, and a
-scoring script that lives in someone else's repo.
+dataset format cannot express -- an upstream fixture trace and a scoring script
+that lives in someone else's repo.
 
 The case mirrors what ``run_repeatability_parallel.sh`` schedules first: the
 Phase-1 agent workflow on ``gemm_01_compute_few_tiles`` from
 ``combined_traces_standalone.csv``, then the first Phase-2 eval,
 ``workflow_scripted_evals.py``, over whatever the agent produced.
 
+Nothing here clones or installs. The three artifacts the case needs are ~1 MB
+in total and are fetched individually over HTTPS, because a checkout of
+AMD-AGI/TraceLens costs well over 100 MB -- its HEAD tree carries ~133 MB of
+end-to-end fixtures this case never opens -- to yield one 981 KB archive:
+
+  * ``combined_traces_standalone.csv`` -- names the case and its platform.
+  * ``unit_tests_standalone.tar.gz``   -- holds the trace itself.
+  * ``workflow_scripted_evals.py``     -- upstream's Phase-2 scorer, which
+    imports nothing but the standard library and so runs under this process's
+    interpreter with no environment of its own.
+
+Putting TraceLens itself on the machine is left to the skill. reference.md
+Step 0 discovers the install, or asks for one, and refuses to advance until
+``import TraceLens`` succeeds; staging it here would skip the part of the
+workflow the case is meant to exercise.
+
 The runner calls, in order:
 
-  * ``setup_session(cache_dir)`` -- once per run. Clones and installs TraceLens
-    outside any agent workspace, and returns the paths the prompt interpolates.
+  * ``setup_session(cache_dir)`` -- once per run. Stages the fixture outside
+    any agent workspace and returns the paths the prompt interpolates.
   * ``setup(workspace, case, ctx)`` -- per case. Creates the output directory
     inside the agent's workspace and hands back its absolute path.
   * ``check(run, case, ctx)``     -- per case, after grading. Runs TraceLens's
     own scorer; anything it flags fails the case.
 
-Environment overrides: ``TRACELENS_REPO_URL`` and ``TRACELENS_REF``.
+Environment overrides: ``TRACELENS_REPO`` and ``TRACELENS_REF``.
 """
 
 from __future__ import annotations
 
 import csv
+import io
 import os
 import subprocess
 import sys
 import tarfile
+import urllib.request
 from pathlib import Path
 
-TRACELENS_REPO_URL = os.environ.get(
-    "TRACELENS_REPO_URL", "https://github.com/AMD-AGI/TraceLens.git"
-)
-TRACELENS_REF = os.environ.get("TRACELENS_REF", "").strip()
-UNIT_TESTS_ARCHIVE = "unit_tests_standalone.tar.gz"
+TRACELENS_REPO = os.environ.get("TRACELENS_REPO", "AMD-AGI/TraceLens")
+# A branch floats: the fixture, the scorer, and whatever TraceLens the agent
+# installs can drift apart between runs. Pin a commit here to make a green run
+# reproducible and an upstream bump a reviewable diff.
+TRACELENS_REF = os.environ.get("TRACELENS_REF", "").strip() or "main"
+
 ANALYSIS_TESTS = "agent_evals/Analysis/analysis_tests"
 COMBINED_TRACES_CSV = f"{ANALYSIS_TESTS}/combined_traces_standalone.csv"
+UNIT_TESTS_ARCHIVE = f"{ANALYSIS_TESTS}/unit_tests_standalone.tar.gz"
+WORKFLOW_EVALS = "agent_evals/Analysis/eval_utils/workflow_scripted_evals.py"
+
+FETCH_TIMEOUT_S = 120
 
 # The default repeatability order starts here. Asserted rather than assumed, so
 # an upstream reordering surfaces as a clear failure instead of silently
@@ -51,81 +74,58 @@ EXPECTED_CASE_ID = "gemm_01_compute_few_tiles"
 MIN_ANALYSIS_BYTES = 100
 
 
-def _run(cmd: list[str], *, cwd: Path | None = None) -> None:
-    proc = subprocess.run(
-        cmd,
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"command failed ({proc.returncode}): {' '.join(cmd)}\n"
-            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-        )
+def _raw_url(repo_path: str) -> str:
+    return f"https://raw.githubusercontent.com/{TRACELENS_REPO}/{TRACELENS_REF}/{repo_path}"
 
 
-def _clone_tracelens(cache_dir: Path) -> Path:
-    dest = cache_dir / "TraceLens"
-    if dest.exists():
-        return dest
-    cmd = ["git", "clone", "--depth", "1"]
-    if TRACELENS_REF:
-        cmd += ["--branch", TRACELENS_REF]
-    _run([*cmd, TRACELENS_REPO_URL, str(dest)])
-    return dest
+def _fetch(repo_path: str) -> bytes:
+    url = _raw_url(repo_path)
+    try:
+        with urllib.request.urlopen(url, timeout=FETCH_TIMEOUT_S) as response:
+            return response.read()
+    except OSError as exc:
+        raise RuntimeError(f"could not fetch {url}: {exc}") from exc
 
 
-def _extract_unit_tests(tracelens_dir: Path) -> None:
-    archive = tracelens_dir / ANALYSIS_TESTS / UNIT_TESTS_ARCHIVE
-    if not archive.is_file():
-        raise FileNotFoundError(f"unit test archive not found: {archive}")
-    if (tracelens_dir / ANALYSIS_TESTS / "unit_tests_standalone").is_dir():
-        return
-    # Archive members are rooted at agent_evals/Analysis/analysis_tests/...
-    # under the repo, so extract at tracelens_dir rather than at that subtree.
-    with tarfile.open(archive, "r:gz") as tar:
-        tar.extractall(path=tracelens_dir)
+def _extract_unit_tests(cache_dir: Path) -> None:
+    """Unpack the fixture archive into `cache_dir`.
 
-
-def _install_tracelens_venv(cache_dir: Path, tracelens_dir: Path) -> Path:
-    venv_dir = cache_dir / ".venv"
-    if not venv_dir.exists():
-        _run([sys.executable, "-m", "venv", str(venv_dir)], cwd=cache_dir)
-    pip = venv_dir / "bin" / "pip"
-    python = venv_dir / "bin" / "python"
-    _run([str(pip), "install", "--upgrade", "pip"], cwd=cache_dir)
-    _run([str(pip), "install", "-e", str(tracelens_dir)], cwd=cache_dir)
-    _run([str(python), "-c", "import TraceLens"], cwd=cache_dir)
-    return venv_dir
+    Members are rooted at ``agent_evals/Analysis/analysis_tests/...`` as they
+    are in the repo, so extracting at `cache_dir` makes the CSV's repo-relative
+    ``trace_path`` resolve against it unchanged.
+    """
+    payload = _fetch(UNIT_TESTS_ARCHIVE)
+    # `data` rejects absolute paths, traversal, and special files. Default from
+    # 3.14, a warning before that, and unsupported in 3.11 and older.
+    guard = {"filter": "data"} if sys.version_info >= (3, 12) else {}
+    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
+        tar.extractall(path=cache_dir, **guard)
 
 
 def setup_session(cache_dir: Path) -> dict:
-    """Clone and install TraceLens once, outside any agent workspace."""
-    print("  [setup] cloning and installing TraceLens (slow, once per run)", flush=True)
-    tracelens_dir = _clone_tracelens(cache_dir).resolve()
-    _extract_unit_tests(tracelens_dir)
+    """Stage the fixture trace and the scorer, outside any agent workspace."""
+    print(f"  [setup] fetching TraceLens fixtures from {TRACELENS_REPO}@{TRACELENS_REF}", flush=True)
 
-    with (tracelens_dir / COMBINED_TRACES_CSV).open(newline="", encoding="utf-8") as handle:
-        row = next(csv.DictReader(handle))
+    manifest = _fetch(COMBINED_TRACES_CSV).decode("utf-8")
+    row = next(csv.DictReader(io.StringIO(manifest)))
     if row["id"] != EXPECTED_CASE_ID:
         raise RuntimeError(
             f"expected the first standalone repeatability case to be "
             f"{EXPECTED_CASE_ID}, found {row['id']}; upstream reordered the CSV."
         )
 
-    trace_path = (tracelens_dir / row["trace_path"]).resolve()
+    _extract_unit_tests(cache_dir)
+    trace_path = (cache_dir / row["trace_path"]).resolve()
     if not trace_path.is_file():
         raise FileNotFoundError(f"trace file missing after extract: {trace_path}")
 
-    venv_dir = _install_tracelens_venv(cache_dir, tracelens_dir).resolve()
+    scorer = (cache_dir / "workflow_scripted_evals.py").resolve()
+    scorer.write_bytes(_fetch(WORKFLOW_EVALS))
+
     return {
-        "tracelens_dir": tracelens_dir,
-        "venv_path": venv_dir,
         "trace_path": trace_path,
         "platform": row["platform"],
+        "scorer_path": scorer,
     }
 
 
@@ -139,25 +139,35 @@ def setup(workspace: Path, case, ctx: dict) -> dict:
 def check(run, case, ctx: dict) -> None:
     """Score the agent's report with TraceLens's own Phase-2 eval."""
     output_dir = Path(ctx["output_dir"])
-    tracelens_dir = Path(ctx["tracelens_dir"])
-    venv_python = Path(ctx["venv_path"]) / "bin" / "python"
+    scorer = Path(ctx["scorer_path"])
 
     analysis_md = output_dir / "analysis.md"
-    assert analysis_md.stat().st_size >= MIN_ANALYSIS_BYTES, (
-        f"analysis.md is only {analysis_md.stat().st_size} bytes; expected at "
-        f"least {MIN_ANALYSIS_BYTES}"
+    assert analysis_md.is_file(), f"no report written to {analysis_md}"
+    size = analysis_md.stat().st_size
+    assert size >= MIN_ANALYSIS_BYTES, (
+        f"analysis.md is only {size} bytes; expected at least {MIN_ANALYSIS_BYTES}"
     )
 
     results_csv = output_dir / "workflow_scripted_results.csv"
-    _run(
+    # The scorer exits non-zero whenever a row fails, which is the outcome this
+    # hook exists to report. Read the CSV it wrote rather than the exit code, so
+    # a graded failure arrives as a legible assertion instead of a crash.
+    proc = subprocess.run(
         [
-            str(venv_python),
-            str(tracelens_dir / "agent_evals/Analysis/eval_utils/workflow_scripted_evals.py"),
+            sys.executable,
+            str(scorer),
             "--output-dir", str(output_dir),
             "--results", str(results_csv),
             "--comparison-scope", "standalone",
         ],
-        cwd=tracelens_dir,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert results_csv.is_file(), (
+        f"workflow_scripted_evals.py wrote no results ({proc.returncode}):\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
 
     with results_csv.open(newline="", encoding="utf-8") as handle:
