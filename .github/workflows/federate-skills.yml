@@ -10,8 +10,10 @@ name: federate-skills
 # pull request titled "Bump `<skill>` to `<commit>`". Validating the result is
 # the `validate` workflow's job on that pull request, not this workflow's.
 #
-# Dispatch it from the branch the update should be merged into (normally
-# `main`), never from `bot/federate-skills`, which is where it pushes.
+# The pull request always targets `main`, whatever branch the run was
+# dispatched from, and the run always uses the dispatched branch's copy of the
+# scripts. So a test dispatch from a side branch exercises that branch's
+# federation code while still proposing the bump where it belongs.
 #
 # See the "Catalog federation" section of `README.md` for the design and
 # `CONTRIBUTING.md` for the federation file's schema.
@@ -37,6 +39,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  BASE_BRANCH: main
   PR_BRANCH: bot/federate-skills
 
 jobs:
@@ -44,18 +47,6 @@ jobs:
     name: Federate skills
     runs-on: ubuntu-latest
     steps:
-      # A pull request cannot target its own head branch, and the failure the
-      # action reports for that ("base and branch must be different") gives no
-      # hint about what to do instead. Catch it up front, before spending a
-      # clone on a run that cannot finish.
-      - name: Check the workflow was dispatched from a mergeable branch
-        run: |
-          if [ "$GITHUB_REF_NAME" = "$PR_BRANCH" ]; then
-            echo "::error title=Dispatched from the wrong branch::federate-skills was run on '$PR_BRANCH', which is the branch it pushes its own pull requests to, so the pull request would target itself. Re-run the workflow from the branch the update should be merged into (normally main)."
-            exit 1
-          fi
-          echo "Federating into '$GITHUB_REF_NAME' via pull request branch '$PR_BRANCH'."
-
       - name: Check out repository
         uses: actions/checkout@v4
 
@@ -101,11 +92,17 @@ jobs:
       # Push to a dedicated branch and open a PR rather than committing to
       # main, so vendored changes stay reviewable and the standard `validate`
       # workflow gates them. Re-running updates the same PR in place.
+      #
+      # `base` is pinned rather than left to default, because the default is the
+      # branch the run was dispatched from: a manual dispatch off a side branch
+      # would otherwise open a pull request targeting that side branch. The
+      # action rebases the vendored changes onto `base` for us.
       - name: Open pull request
         id: pr
         if: ${{ steps.changes.outputs.changed == 'true' }}
         uses: peter-evans/create-pull-request@v7
         with:
+          base: ${{ env.BASE_BRANCH }}
           branch: ${{ env.PR_BRANCH }}
           delete-branch: true
           commit-message: ${{ steps.federate.outputs.title || 'Refresh federated skills' }}
