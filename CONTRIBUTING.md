@@ -15,7 +15,7 @@ Three companion guides hold the detail:
 | --- | --- |
 | [docs/skill-requirements.md](docs/skill-requirements.md) | The rules CI enforces: required files, frontmatter limits, skill cards, the pre-PR checklist |
 | [docs/best-practices.md](docs/best-practices.md) | How to write a skill agents actually reach for: fit, descriptions, body structure, scripts, AMD specifics |
-| [docs/evals.md](docs/evals.md) | How structure, routing, and behavior are graded, and what to put in `evals/evals.json` |
+| [docs/evals.md](docs/evals.md) | How structure, routing, and behavior are graded, and where `evals/evals.json` is documented |
 
 For repository structure and the broader catalog model, see the
 [README](README.md).
@@ -101,22 +101,60 @@ maintainer reviews and merges once CI passes. The `validate` workflow runs
 Never hand-edit vendored skills under `skills/`. Changes must come from your
 repo via re-import, or they will be overwritten.
 
-## Catch failures before nightly
+## Run the same tests in your repo
 
-The catalog runs checks against your skills. Run the **same** checks in your own
-repo by calling them as reusable workflows, so you catch breakage during normal
-development instead of in the catalog's nightly run. The logic and config live
-in `amd/skills`, so green in your repo means green in the catalog, and you never
-copy or maintain the check yourself.
+The catalog grades your skills on routing (does it fire when it should, and stay
+quiet when it should not?) and behavior (once it has fired, does it do the job?).
+Run the identical pipeline in your own repo and you catch a break while you are
+writing the change, instead of after it has been imported here.
 
-Add a caller workflow to your repo (e.g. `.github/workflows/skills-checks.yml`):
+Three steps, once:
+
+1. **Write the dataset.** `evals/evals.json` beside each skill, per
+   [skillscope's authoring guide](https://github.com/amd/skillscope/blob/main/docs/authoring-evals.md).
+   Start from `skillscope template`.
+2. **Call the pipeline.** In `.github/workflows/skill-evals.yml`:
+
+   ```yaml
+   name: skill-evals
+   on:
+     pull_request:
+     workflow_dispatch:
+   jobs:
+     skill-evals:
+       uses: amd/skillscope/.github/workflows/skill-evals.yml@bootstrap
+       secrets: inherit
+       with:
+         # The skills a routing run installs side by side. Yours plus the ones
+         # closest to it: routing is about who wins a prompt, so a skill graded
+         # alone wins everything by walkover.
+         routing_skills: my-skill,its-neighbour
+         infra_paths: .github/workflows/skill-evals.yml
+         version: main
+         api_key_secret: YOUR_MODEL_API_KEY_SECRET
+   ```
+
+   That block is the whole configuration -- there is no config file. If your
+   skills are not under `skills/*`, or your runners are not GitHub-hosted, that
+   is where you say so; see
+   [skillscope's README](https://github.com/amd/skillscope#configuring-the-repo-under-test).
+3. **Register the skill.** Open a pull request adding your entry to
+   `.github/federation.json`, as above.
+
+Three honest caveats. The harness version is the `version` input above, not the
+`uses:` ref -- `@bootstrap` is a launcher that never changes -- and a skill can
+pin its own with `skillscope_version` in its `evals.json`. Your routing run
+grades your skill against the skills you list, which is not the same room as the
+catalog's published bundle, so a green run at home is evidence rather than a
+guarantee. And until `evals/` becomes part of what federation carries, the
+catalog keeps its own copy of each dataset: your repo's copy is what your CI
+grades, the catalog's copy is what the catalog's CI grades, and the two have to
+be kept in step by hand.
+
+The catalog also checks external links in your markdown, which is worth running
+in your repo for the same reason:
 
 ```yaml
-name: skills-checks
-on:
-  pull_request:
-  workflow_dispatch:
-jobs:
   external-references:
     uses: amd/skills/.github/workflows/external-reference-check.yml@main
     permissions:

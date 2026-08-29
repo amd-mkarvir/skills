@@ -1,1 +1,6 @@
-runner_type: instinct
+# This skill's behavior cases serve a model on an Instinct GPU, so grading them
+# on a runner without one measures nothing. The labels name the hardware; who
+# rations that pool and which credentials pay for it belong to the repo, not to
+# this skill, and live in .github/workflows/evals.yml.
+os: [Linux]
+labels: [mi300x, gpu, rocm]

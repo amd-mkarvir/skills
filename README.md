@@ -158,6 +158,15 @@ A vendored skill mirrors its upstream folder with one exception: for now
 federation does not carry the skill's `evals/` folder in either direction, so
 the datasets this repo grades skills against live and are maintained here.
 
+Testing is federated too. The harness that grades routing and behavior is
+[amd/skillscope](https://github.com/amd/skillscope), not part of this catalog,
+so a product repo runs the identical pipeline over its own tree and a change is
+graded where it is authored rather than after it lands here. What stays in this
+repo is the configuration that describes it, in
+[.github/workflows/evals.yml](.github/workflows/evals.yml): where the skills
+are, which of them compete against each other for a routing decision, what our
+runners are labelled, and which build of the harness runs.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) to register a repo.
 
 ## Manual installation

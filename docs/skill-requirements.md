@@ -136,6 +136,7 @@ A reviewer will push back if any of these are false:
 - [ ] The skill was tested end-to-end on the target hardware against real prompts
 
 ```bash
-./.github/scripts/check.sh                    # structural validation, no tokens
-python eval/run_evals.py --skill <your-skill> # routing and behavior
+./.github/scripts/check.sh                            # structural validation, no tokens
+skillscope run --mode behavior --skill <your-skill>   # your skill, end to end
+skillscope run --mode routing --routing-skills all    # every skill here, in one room
 ```

@@ -1,1 +1,6 @@
-runner_type: instinct
+# Hyperloom tunes real workloads on real Instinct hardware, so its behavior
+# cases need a runner with a GPU in it. The labels name the hardware; who
+# rations that pool and which credentials pay for it belong to the repo, not to
+# this skill, and live in .github/workflows/evals.yml.
+os: [Linux]
+labels: [mi300x, gpu, rocm]
