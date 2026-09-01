@@ -50,6 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import claude_env  # noqa: E402
+import codex_backend  # noqa: E402
 from datasets import SKILLS_DIR, Case  # noqa: E402
 
 # Tools that carry no routing signal. An agent often opens with a todo list or
@@ -84,6 +85,8 @@ class RoutingConfig:
     keep_logs: str = ""
     available_flags: set[str] = field(default_factory=set)
     isolate_config: bool = False
+    agent: str = "claude"
+    codex_home: Path | None = None
 
 
 @dataclass
@@ -105,7 +108,7 @@ class Outcome:
     error: str | None = None
 
 
-def stage_workspace(skills: list[str]) -> Path:
+def stage_workspace(skills: list[str], agent: str = "claude") -> Path:
     """Install every catalog skill into a fresh temp workspace.
 
     Claude Code loads ``.claude/skills/`` from a directory passed with
@@ -115,14 +118,15 @@ def stage_workspace(skills: list[str]) -> Path:
     lets them run concurrently).
     """
     workspace = Path(tempfile.mkdtemp(prefix="routing-"))
-    dest_root = workspace / ".claude" / "skills"
-    dest_root.mkdir(parents=True, exist_ok=True)
-    for skill in skills:
-        shutil.copytree(SKILLS_DIR / skill, dest_root / skill)
+    if agent == "claude":
+        dest_root = workspace / ".claude" / "skills"
+        dest_root.mkdir(parents=True, exist_ok=True)
+        for skill in skills:
+            shutil.copytree(SKILLS_DIR / skill, dest_root / skill)
     return workspace
 
 
-def supported_flags(flags: list[str]) -> set[str]:
+def supported_flags(flags: list[str], agent: str = "claude") -> set[str]:
     """Which of `flags` the installed `claude` build advertises in --help.
 
     The two cost-control flags this eval likes to pass are recent additions. An
@@ -130,12 +134,12 @@ def supported_flags(flags: list[str]) -> set[str]:
     reads like a routing collapse rather than a flag problem -- so check once
     (free, no tokens) and drop what isn't there.
     """
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
+    cli_bin = shutil.which(agent)
+    if not cli_bin:
         return set()
     try:
         proc = subprocess.run(
-            [claude_bin, "--help"], capture_output=True, text=True, encoding="utf-8", timeout=60
+            [cli_bin, "--help"], capture_output=True, text=True, encoding="utf-8", timeout=60
         )
     except (subprocess.SubprocessError, OSError):
         return set()
@@ -168,6 +172,11 @@ def _iter_tool_uses(obj) -> list[tuple[str, str]]:
                         json.dumps(node.get("input", {}), ensure_ascii=False),
                     )
                 )
+            elif node.get("type") in {"command_execution", "mcp_tool_call", "file_change"}:
+                kind = str(node.get("type"))
+                name = str(node.get("tool") or node.get("name") or kind)
+                value = node.get("command") or node.get("arguments") or node.get("changes") or {}
+                found.append((name, json.dumps(value, ensure_ascii=False)))
             for value in node.values():
                 walk(value)
         elif isinstance(node, list):
@@ -247,6 +256,33 @@ def detect_activation(event: dict, skills: list[str], allow_body_path: bool = Tr
     is a contaminated runner, not a routing result, and the report should say
     so rather than silently scoring it as a miss.
     """
+    def find_codex_invocation(node) -> str | None:
+        if isinstance(node, dict):
+            if node.get("type") == "skill_invocation":
+                invoked = str(
+                    node.get("skill_name")
+                    or node.get("name")
+                    or node.get("skill")
+                    or node.get("skill_id")
+                    or ""
+                ).strip()
+                hit = _match_skill(invoked, skills)
+                return hit or f"other:{invoked or 'unknown'}"
+            for value in node.values():
+                hit = find_codex_invocation(value)
+                if hit:
+                    return hit
+        elif isinstance(node, list):
+            for value in node:
+                hit = find_codex_invocation(value)
+                if hit:
+                    return hit
+        return None
+
+    codex_hit = find_codex_invocation(event)
+    if codex_hit:
+        return codex_hit
+
     for name, tool_input in _iter_tool_uses(event):
         lowered = name.lower()
         if lowered in SKILL_TOOLS:
@@ -394,35 +430,47 @@ def classify(expect: str | None, observed: str | None) -> str:
 
 def run_case(case: Case, skills: list[str], config: RoutingConfig) -> Outcome:
     """Run one prompt, stopping as soon as the routing decision is known."""
-    claude_bin = shutil.which("claude")
-    if not claude_bin:
-        raise SystemExit("error: 'claude' CLI not found on PATH")
+    cli_bin = shutil.which(config.agent)
+    if not cli_bin:
+        raise SystemExit(f"error: '{config.agent}' CLI not found on PATH")
+    if config.agent == "codex" and config.codex_home is None:
+        raise SystemExit("error: Codex routing requires an isolated plugin installation")
 
-    workspace = stage_workspace(skills)
+    workspace = stage_workspace(skills, config.agent)
     # Outside the workspace: the agent can list its own cwd, and a config dir
     # sitting in there would be one more thing for it to find.
     config_dir = (
-        Path(tempfile.mkdtemp(prefix="routing-config-")) if config.isolate_config else None
+        Path(tempfile.mkdtemp(prefix="routing-config-"))
+        if config.agent == "claude" and config.isolate_config
+        else None
     )
-    cmd = [
-        claude_bin,
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--dangerously-skip-permissions",
-        "--add-dir",
-        str(workspace),
-        "--model",
-        config.model,
-    ]
-    if config.effort:
-        cmd += ["--effort", config.effort]
-    # Dozens of throwaway sessions per run; don't leave them on disk.
-    if "--no-session-persistence" in config.available_flags:
-        cmd += ["--no-session-persistence"]
-    if config.max_budget_usd > 0 and "--max-budget-usd" in config.available_flags:
-        cmd += ["--max-budget-usd", str(config.max_budget_usd)]
+    if config.agent == "codex":
+        cmd = codex_backend.exec_command(
+            workspace,
+            model=config.model or None,
+            effort=config.effort,
+            sandbox="read-only",
+        )
+    else:
+        cmd = [
+            cli_bin,
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--dangerously-skip-permissions",
+            "--add-dir",
+            str(workspace),
+            "--model",
+            config.model,
+        ]
+        if config.effort:
+            cmd += ["--effort", config.effort]
+        # Dozens of throwaway sessions per run; don't leave them on disk.
+        if "--no-session-persistence" in config.available_flags:
+            cmd += ["--no-session-persistence"]
+        if config.max_budget_usd > 0 and "--max-budget-usd" in config.available_flags:
+            cmd += ["--max-budget-usd", str(config.max_budget_usd)]
 
     spawn: dict = {}
     if os.name == "nt":
@@ -430,13 +478,17 @@ def run_case(case: Case, skills: list[str], config: RoutingConfig) -> Outcome:
     else:
         spawn["start_new_session"] = True
 
-    env = claude_env()
-    if config_dir is not None:
-        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+    if config.agent == "codex":
+        assert config.codex_home is not None
+        env = codex_backend.codex_env(config.codex_home)
+    else:
+        env = claude_env()
+        if config_dir is not None:
+            env["CLAUDE_CONFIG_DIR"] = str(config_dir)
 
     events: list[dict] = []
     observed: str | None = None
-    visible: list[str] = []
+    visible: list[str] = list(skills) if config.agent == "codex" else []
     extra: list[str] = []
     stop_reason = "completed"
     tool_calls = 0
@@ -512,6 +564,13 @@ def run_case(case: Case, skills: list[str], config: RoutingConfig) -> Outcome:
                 if event.get("is_error"):
                     error = str(event.get("result") or "result event reported an error")[:400]
                 break
+            if event.get("type") == "turn.completed":
+                stop_reason = "result"
+                break
+            if event.get("type") == "error":
+                stop_reason = "result"
+                error = str(event.get("message") or "Codex reported an error")[:400]
+                break
 
             for name, tool_input in _iter_tool_uses(event):
                 if name.lower() in BOOKKEEPING_TOOLS:
@@ -541,7 +600,10 @@ def run_case(case: Case, skills: list[str], config: RoutingConfig) -> Outcome:
             shutil.rmtree(config_dir, ignore_errors=True)
 
     if not events:
-        error = ("".join(stderr_lines).strip() or "claude produced no stream-json output")[:400]
+        error = (
+            "".join(stderr_lines).strip()
+            or f"{config.agent} produced no stream-json output"
+        )[:400]
 
     # "no skill activated" is only a real finding when the run got far enough to
     # show a decision: the agent answered (`result`) or started doing the work
@@ -668,6 +730,8 @@ def render_markdown(summary: dict) -> str:
     totals = summary["totals"]
     verdicts = summary["verdicts"]
     meta = summary["meta"]
+    model = meta.get("model") or "CLI default"
+    agent = meta.get("agent", "claude")
     accuracy = totals["accuracy"]
     lines = [
         "## Skill routing",
@@ -675,7 +739,7 @@ def render_markdown(summary: dict) -> str:
         f"**{totals['passed']}/{totals['graded']} correct "
         f"({'n/a' if accuracy is None else f'{accuracy:.1%}'})** across "
         f"{totals['cases']} prompts with the {len(meta['skills'])} published "
-        f"skills installed together, on `{meta['model']}` "
+        f"skills installed together with `{agent}` on `{model}` "
         f"(effort `{meta['effort']}`).",
         "",
     ]
@@ -786,7 +850,7 @@ def render_markdown(summary: dict) -> str:
             "> **Not a valid result:** no skill activated in any case, including "
             f"the {totals['activations_expected']} that expected one. The skills "
             "were probably not installed for the session, or the activation "
-            "detector no longer matches this `claude` build. Re-run with "
+            f"detector no longer matches this `{agent}` build. Re-run with "
             "`--keep-logs` and inspect a transcript before trusting these numbers.",
         ]
     if summary["unexpected_skills"]:

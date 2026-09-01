@@ -19,12 +19,14 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 EVAL_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(EVAL_DIR))
 
 import agent  # noqa: E402
+import codex_backend  # noqa: E402
 import datasets  # noqa: E402
 import routing  # noqa: E402
 import run_evals  # noqa: E402
@@ -506,6 +508,28 @@ class TestActivationDetection(unittest.TestCase):
         event = self.event("Skill", {"command": "local-ai-use"})
         self.assertEqual(routing.detect_activation(event, self.SKILLS), "local-ai-use")
 
+    def test_codex_skill_invocation_is_an_activation(self) -> None:
+        event = {
+            "type": "item.completed",
+            "item": {
+                "type": "skill_invocation",
+                "skill_name": "amd-skills:serving-llms-on-instinct",
+            },
+        }
+        self.assertEqual(
+            routing.detect_activation(event, self.SKILLS),
+            "serving-llms-on-instinct",
+        )
+
+    def test_codex_skill_outside_catalog_is_flagged(self) -> None:
+        event = {
+            "type": "item.completed",
+            "item": {"type": "skill_invocation", "skill_name": "other-plugin:demo"},
+        }
+        self.assertEqual(
+            routing.detect_activation(event, self.SKILLS), "other:other-plugin:demo"
+        )
+
     def test_longest_name_wins_when_one_is_a_prefix_of_another(self) -> None:
         event = self.event("Skill", {"command": "local-ai-app-integration"})
         self.assertEqual(
@@ -598,6 +622,31 @@ class TestRunGrading(unittest.TestCase):
         self.assertIn("detect.py", run.logs)
         self.assertEqual(run.result_text, "done")
 
+    def test_codex_transcript_and_final_message_are_captured(self) -> None:
+        events = [
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "command_execution",
+                    "command": "python detect.py",
+                    "aggregated_output": "ok",
+                },
+            },
+            {
+                "type": "item.completed",
+                "item": {"type": "agent_message", "text": "done with Codex"},
+            },
+        ]
+        run = agent.Run(
+            workspace=self.workspace,
+            events=events,
+            judge_model=None,
+            backend="codex",
+        )
+        self.assertIn("command_execution", run.tool_names)
+        self.assertIn("detect.py", run.command_text)
+        self.assertEqual(run.result_text, "done with Codex")
+
     def test_logs_contain_is_case_insensitive(self) -> None:
         run = self.make_run(stream(("Bash", {"command": "python DETECT.py"})))
         checks = run.evaluate(logs_contain=["detect.py"])
@@ -658,6 +707,32 @@ class TestRunGrading(unittest.TestCase):
         (staged / "SKILL.md").write_text("x", encoding="utf-8")
         (self.workspace / "out.png").write_bytes(b"x")
         self.assertEqual(self.make_run(stream()).files, ["out.png"])
+
+
+class TestCodexBackend(unittest.TestCase):
+    def test_exec_command_is_noninteractive_ephemeral_and_sandboxed(self) -> None:
+        with mock.patch.object(codex_backend.shutil, "which", return_value="codex"):
+            cmd = codex_backend.exec_command(
+                Path("workspace"),
+                model="gpt-test",
+                effort="high",
+                sandbox="read-only",
+            )
+        self.assertEqual(cmd[:2], ["codex", "exec"])
+        self.assertIn("--json", cmd)
+        self.assertIn("--ephemeral", cmd)
+        self.assertIn("read-only", cmd)
+        self.assertIn("gpt-test", cmd)
+        self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", cmd)
+        self.assertEqual(cmd[-1], "-")
+
+    def test_behavior_command_uses_workspace_write_with_approval_review(self) -> None:
+        with mock.patch.object(codex_backend.shutil, "which", return_value="codex"):
+            cmd = codex_backend.exec_command(
+                Path("workspace"), model=None, effort=None, sandbox="workspace-write"
+            )
+        self.assertIn("workspace-write", cmd)
+        self.assertIn("--approve-for-me", cmd)
 
 
 class FakeAgent:
