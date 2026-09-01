@@ -256,33 +256,6 @@ def detect_activation(event: dict, skills: list[str], allow_body_path: bool = Tr
     is a contaminated runner, not a routing result, and the report should say
     so rather than silently scoring it as a miss.
     """
-    def find_codex_invocation(node) -> str | None:
-        if isinstance(node, dict):
-            if node.get("type") == "skill_invocation":
-                invoked = str(
-                    node.get("skill_name")
-                    or node.get("name")
-                    or node.get("skill")
-                    or node.get("skill_id")
-                    or ""
-                ).strip()
-                hit = _match_skill(invoked, skills)
-                return hit or f"other:{invoked or 'unknown'}"
-            for value in node.values():
-                hit = find_codex_invocation(value)
-                if hit:
-                    return hit
-        elif isinstance(node, list):
-            for value in node:
-                hit = find_codex_invocation(value)
-                if hit:
-                    return hit
-        return None
-
-    codex_hit = find_codex_invocation(event)
-    if codex_hit:
-        return codex_hit
-
     for name, tool_input in _iter_tool_uses(event):
         lowered = name.lower()
         if lowered in SKILL_TOOLS:
@@ -428,6 +401,16 @@ def classify(expect: str | None, observed: str | None) -> str:
     return "correct_trigger" if observed == expect else "wrong_skill"
 
 
+def _terminal_failure(event: dict) -> str | None:
+    """Return a terminal Codex failure message; retry notices are non-terminal."""
+    if event.get("type") != "turn.failed":
+        return None
+    failure = event.get("error")
+    if isinstance(failure, dict):
+        failure = failure.get("message") or failure
+    return str(failure or "Codex turn failed")[:400]
+
+
 def run_case(case: Case, skills: list[str], config: RoutingConfig) -> Outcome:
     """Run one prompt, stopping as soon as the routing decision is known."""
     cli_bin = shutil.which(config.agent)
@@ -567,9 +550,12 @@ def run_case(case: Case, skills: list[str], config: RoutingConfig) -> Outcome:
             if event.get("type") == "turn.completed":
                 stop_reason = "result"
                 break
-            if event.get("type") == "error":
+            # Generic `error` events can be retry notices; Codex may recover
+            # and finish the turn. `turn.failed` is the terminal failure.
+            failure = _terminal_failure(event)
+            if failure is not None:
                 stop_reason = "result"
-                error = str(event.get("message") or "Codex reported an error")[:400]
+                error = failure
                 break
 
             for name, tool_input in _iter_tool_uses(event):

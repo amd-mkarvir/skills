@@ -497,13 +497,31 @@ def main(argv: list[str] | None = None) -> int:
         args.model = enforce_model_policy(args.model) or args.model
     skills = _selected_skills(args)
     catalog = datasets.routing_catalog()
+    routing_codex_install = None
+    routing_codex_home = None
 
     if not args.skip_preflight:
         if args.agent == "codex":
-            with codex_backend.install([skills[0]]) as preflight_home:
-                ok, detail = codex_backend.check_api_reachable(
-                    preflight_home, args.model or None, args.effort
-                )
+            if args.mode in ("routing", "both") and catalog:
+                # Reuse the catalog installation for the routing run below.
+                routing_codex_install = codex_backend.install(catalog)
+                try:
+                    routing_codex_home = routing_codex_install.__enter__()
+                    ok, detail = codex_backend.check_api_reachable(
+                        routing_codex_home, args.model or None, args.effort
+                    )
+                except BaseException:
+                    routing_codex_install.__exit__(None, None, None)
+                    raise
+                if not ok:
+                    routing_codex_install.__exit__(None, None, None)
+                    routing_codex_install = None
+                    routing_codex_home = None
+            else:
+                with codex_backend.install([skills[0]]) as preflight_home:
+                    ok, detail = codex_backend.check_api_reachable(
+                        preflight_home, args.model or None, args.effort
+                    )
         else:
             ok, detail = check_api_reachable(args.model)
         if not ok:
@@ -539,8 +557,12 @@ def main(argv: list[str] | None = None) -> int:
                 "installed and so could never win them."
             )
 
-        codex_install = codex_backend.install(catalog) if args.agent == "codex" else None
-        codex_home = codex_install.__enter__() if codex_install is not None else None
+        if args.agent == "codex":
+            codex_install = routing_codex_install or codex_backend.install(catalog)
+            codex_home = routing_codex_home or codex_install.__enter__()
+        else:
+            codex_install = None
+            codex_home = None
         config = routing.RoutingConfig(
             model=args.model,
             effort=args.effort,
